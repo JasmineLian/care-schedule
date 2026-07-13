@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>居護行程動態表</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+:root{
+  --bg:#f5f6fa; --card:#ffffff; --ink:#2d3436; --muted:#8a8f98;
+  --brand:#305496; --brand2:#4472c4; --line:#e4e7ee;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); padding:16px;}
+.wrap{max-width:1320px; margin:0 auto;}
+h1{font-size:22px; color:var(--brand); margin-bottom:4px;}
+.sub{color:var(--muted); font-size:13px; margin-bottom:14px;}
+
+.tabs{display:flex; gap:8px; margin-bottom:12px;}
+.tab{padding:8px 22px; border-radius:8px 8px 0 0; background:#dfe4ee; cursor:pointer; font-weight:bold; border:1px solid var(--line); border-bottom:none; user-select:none;}
+.tab.active{background:var(--brand); color:#fff;}
+
+.upload{background:var(--card); border:2px dashed var(--brand2); border-radius:10px; padding:16px; text-align:center; margin-bottom:14px; cursor:pointer; transition:.15s;}
+.upload:hover,.upload.drag{background:#eef3fc; border-color:var(--brand);}
+.upload b{color:var(--brand);}
+.upload .hint{font-size:12px; color:var(--muted); margin-top:4px;}
+#fileInput{display:none;}
+
+.toolbar{display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;}
+.month-nav{display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:4px 8px;}
+.month-nav button{border:none; background:none; font-size:16px; cursor:pointer; padding:4px 8px; color:var(--brand); font-weight:bold;}
+.month-label{font-weight:bold; font-size:15px; min-width:96px; text-align:center;}
+.btn{border:1px solid var(--line); background:var(--card); border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px;}
+.btn:hover{background:#eef3fc;}
+.btn.danger{color:#c0392b;}
+.btn.primary{background:var(--brand); color:#fff; border-color:var(--brand);}
+.spacer{flex:1;}
+.status{font-size:12px; color:var(--muted);}
+
+.table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; margin-bottom:14px;}
+table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
+th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
+thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px;}
+thead th.zone{background:var(--brand2);}
+td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd;}
+tr.wknd td{background:#f1f2f6;}
+tr.wknd td.day,tr.wknd td.wd{background:#e8eaf0;}
+td.cnt{width:56px; font-weight:bold; font-size:14px; cursor:pointer;}
+td.cnt:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
+td.dists{text-align:left; min-width:200px;}
+td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; background:#eef3fc !important;}
+.today td.day{background:#ffe082 !important;}
+
+.chip{display:inline-flex; align-items:center; gap:3px; padding:2px 6px 2px 9px; border-radius:12px; margin:2px 3px; font-size:12.5px; font-weight:bold; color:#2d3436; background:#eceff4; border:1px solid rgba(0,0,0,.07); cursor:grab; user-select:none;}
+.chip:active{cursor:grabbing;}
+.chip.dragging{opacity:.4;}
+.chip.unknown{border:1.5px dashed #c0392b;}
+.chip .cbadge{background:rgba(0,0,0,.55); color:#fff; font-size:10.5px; border-radius:9px; padding:0 5px; line-height:15px; font-weight:bold;}
+.chip .x{cursor:pointer; font-size:11px; opacity:.45; padding:0 2px; border-radius:50%; line-height:1;}
+.chip .x:hover{opacity:1; color:#c0392b;}
+.addbtn{display:inline-block; width:22px; height:22px; line-height:20px; text-align:center; border-radius:50%; border:1.5px dashed var(--brand2); color:var(--brand2); cursor:pointer; font-weight:bold; margin:2px 3px; vertical-align:middle; font-size:14px; user-select:none;}
+.addbtn:hover{background:var(--brand2); color:#fff; border-style:solid;}
+
+/* ===== 可互動、可捲動的浮標視窗 ===== */
+#tip{position:fixed; z-index:80; background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 24px rgba(0,0,0,.18); width:360px; display:none; font-size:12.5px; pointer-events:auto;}
+#tip .tip-head{display:flex; align-items:center; justify-content:space-between; padding:9px 12px 7px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#fff; border-radius:10px 10px 0 0;}
+#tip .tip-head h4{font-size:13.5px; color:var(--brand);}
+#tip .tip-head .hint{font-size:10.5px; color:var(--muted); font-weight:normal;}
+#tip .tip-close{cursor:pointer; font-size:14px; color:var(--muted); padding:2px 6px; border-radius:6px; line-height:1;}
+#tip .tip-close:hover{background:#fdeeee; color:#c0392b;}
+#tip .tip-body{overflow-y:auto; overscroll-behavior:contain; padding:4px 12px 10px;}
+#tip .tip-body::-webkit-scrollbar{width:8px;}
+#tip .tip-body::-webkit-scrollbar-thumb{background:#c5cbd6; border-radius:4px;}
+#tip .person{padding:7px 0; border-bottom:1px dashed #edf0f5;}
+#tip .person:last-child{border-bottom:none;}
+#tip .pname{font-weight:bold;}
+#tip .paddr{color:#4a6da7; font-size:12px; margin-top:1px;}
+#tip .pnote{color:var(--muted); font-size:11.5px; margin-top:2px; line-height:1.45;}
+#tip .none{color:var(--muted); padding:8px 0;}
+#tip.pinned{box-shadow:0 6px 24px rgba(0,0,0,.28), 0 0 0 2px var(--brand2);}
+
+.legend{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px;}
+.legend h3{font-size:14px; margin-bottom:8px; color:var(--brand);}
+.legend .row{display:flex; align-items:center; gap:8px; margin:5px 0; font-size:13px;}
+.legend .sw{width:34px; height:18px; border-radius:5px; border:1px solid rgba(0,0,0,.1); flex-shrink:0;}
+
+.modal-bg{position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:50;}
+.modal-bg.show{display:flex;}
+.modal{background:#fff; border-radius:12px; padding:20px; width:min(560px,94vw); max-height:88vh; overflow:auto;}
+.modal h3{font-size:16px; margin-bottom:10px; color:var(--brand);}
+.modal label{font-size:13px; color:var(--muted); display:block; margin:12px 0 5px; font-weight:bold;}
+.modal input[type=number]{width:110px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:15px; font-family:inherit; font-weight:bold;}
+.selected-area{min-height:38px; border:1px solid var(--line); border-radius:8px; padding:5px; background:#fafbfd;}
+.selected-area .empty{color:var(--muted); font-size:12px; padding:6px;}
+.pick-group{margin:7px 0;}
+.pick-group .gtitle{font-size:11.5px; color:var(--muted); margin-bottom:3px;}
+.pick{display:inline-block; padding:5px 13px; border-radius:14px; margin:3px; font-size:13px; font-weight:bold; cursor:pointer; border:2px solid rgba(0,0,0,.08); user-select:none; transition:.1s;}
+.pick:hover{transform:scale(1.06);}
+.pick.on{border-color:#2d3436; box-shadow:0 0 0 1.5px #2d3436 inset;}
+.pick.on::after{content:" ✓";}
+.custom-row{display:flex; gap:8px; margin-top:6px;}
+.custom-row input{flex:1; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:14px; font-family:inherit;}
+.modal .acts{display:flex; gap:8px; margin-top:16px; justify-content:flex-end;}
+
+#toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#2d3436; color:#fff; padding:10px 20px; border-radius:8px; font-size:13px; opacity:0; transition:.3s; pointer-events:none; z-index:99; max-width:90vw;}
+#toast.show{opacity:1;}
+.parse-report{background:#eef9f0; border:1px solid #b7e4c0; border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:12px; display:none;}
+.parse-report.err{background:#fdeeee; border-color:#f0b9b9;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📋 居護行程動態表</h1>
+  <div class="sub">上傳 PDF 自動解析｜🖱 拖曳標籤可搬區｜滑到標籤看名單（可捲動），<b>點標籤可釘選</b>｜標籤數字＝該區人數</div>
+
+  <div class="tabs">
+    <div class="tab active" data-org="ivy" onclick="switchOrg('ivy')">常春藤</div>
+    <div class="tab" data-org="tree" onclick="switchOrg('tree')">長青樹</div>
+  </div>
+
+  <div class="upload" id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <b>📄 點擊或拖曳 PDF 到這裡上傳</b>（可一次多個檔案）
+    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註</div>
+    <input type="file" id="fileInput" accept=".pdf" multiple>
+  </div>
+
+  <div class="parse-report" id="parseReport"></div>
+
+  <div class="toolbar">
+    <div class="month-nav">
+      <button onclick="navMonth(-1)">◀</button>
+      <div class="month-label" id="monthLabel"></div>
+      <button onclick="navMonth(1)">▶</button>
+    </div>
+    <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
+    <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
+    <button class="btn" onclick="manualSync()">🔄 同步最新</button>
+    <div class="spacer"></div>
+    <div class="status" id="saveStatus"></div>
+  </div>
+
+  <div class="table-card"><table id="mainTable"></table></div>
+
+  <div class="legend" id="legend"></div>
+</div>
+
+<!-- 個案名單浮標視窗 -->
+<div id="tip" onmouseenter="tipHoverIn()" onmouseleave="tipHoverOut()">
+  <div class="tip-head">
+    <h4 id="tipTitle"></h4>
+    <span style="display:flex;align-items:center;gap:6px;">
+      <span class="hint" id="tipHint">點標籤可釘選</span>
+      <span class="tip-close" onclick="hideTipNow()">✕</span>
+    </span>
+  </div>
+  <div class="tip-body" id="tipBody"></div>
+</div>
+
+<!-- 行政區快選 Modal -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 id="modalTitle">編輯</h3>
+    <label>👥 人數</label>
+    <input type="number" id="editCount" min="0">
+    <label>📍 已選行政區（依順序，點 × 移除）</label>
+    <div class="selected-area" id="selectedArea"></div>
+    <label>🎯 點選新增行政區（同組同色）</label>
+    <div id="pickerGroups"></div>
+    <label>✏️ 自訂（清單沒有的機構或地區）</label>
+    <div class="custom-row">
+      <input type="text" id="customInput" placeholder="輸入名稱後按新增，例：福安" onkeydown="if(event.key==='Enter')addCustom()">
+      <button class="btn" onclick="addCustom()">新增</button>
+    </div>
+    <div class="acts">
+      <button class="btn danger" onclick="deleteCell()">刪除此格</button>
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="saveCell()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/* ===== 設定 ===== */
+const GROUPS = {
+  ivy: [
+    {names:["松山","中山","大同","大安","信義"], color:"#F8BBD0"},
+    {names:["士林"], color:"#FFF59D"},
+    {names:["萬華","中正","文山"], color:"#FFCC80"},
+    {names:["深坑","石碇","坪林"], color:"#C8E6C9"},
+    {names:["南港","內湖","汐止","瑞芳"], color:"#90CAF9"},
+    {names:["基隆","金山","萬里"], color:"#CE93D8"},
+    {names:["元康","銀泰","瑞礦","童音","童心","康庭","福安"], color:"#CFD8DC"},
+  ],
+  tree: [
+    {names:["北投","淡水","三芝","石門"], color:"#90CAF9"},
+    {names:["三重","蘆洲","五股","八里"], color:"#C8E6C9"},
+    {names:["泰山","新莊","板橋"], color:"#FFCC80"},
+    {names:["中和","永和","新店","烏來"], color:"#F8BBD0"},
+    {names:["土城","樹林","三峽","林口","桃園"], color:"#CE93D8"},
+    {names:["吉康","盛禾","愛心","長勤"], color:"#CFD8DC"},
+  ]
+};
+const DEFAULT_ZONES = { ivy:["A","B","C"], tree:["B","E","F"] };
+const ORG_NAME = { ivy:"常春藤", tree:"長青樹" };
+const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義","士林","北投","內湖","南港","文山",
+"板橋","三重","中和","永和","新莊","新店","土城","蘆洲","汐止","樹林","鶯歌","三峽","淡水","瑞芳",
+"五股","泰山","林口","深坑","石碇","坪林","三芝","石門","八里","平溪","雙溪","貢寮","金山","萬里","烏來",
+"安樂","暖暖","七堵","仁愛"];
+const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
+const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
+["康庭","康庭"],["福安","福安"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
+const WEEK = ["日","一","二","三","四","五","六"];
+const STORE_KEY = "careone-schedule-v1";
+const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差"]);
+const NOTE_SKIP = new Set(["費用","備註","說明","診斷","預計","收費","實際申報","電話","地址","更換管路","傷口","移除","住院","舊案","VPN","工作人員：","耗材：","小計：","部分負擔：","，支出："]);
+const NOTE_SKIP_PREFIX = ["方鼎掛號","申報核對","預約訪視：","社會資源","工作人員","部分負擔","小計","耗材","□","登入總表","醫囑單","護理紀錄","身體評估單"];
+
+let data = { ivy:{}, tree:{} };
+let curOrg = "ivy";
+let curYM = null;
+let editing = null;
+let tempDists = [];
+let dragInfo = null;
+
+/* ===== 共用同步設定 =====
+   ★ 部署到 GitHub 時：把下面引號內換成你的 Google Apps Script「網頁應用程式」網址
+   （做法見「部署教學.md」）。留空 = 資料只存在本機瀏覽器。 */
+const SYNC_URL = "https://script.google.com/macros/s/AKfycby4uDv_JrY6_e0AqRzuRIF8YZLHdc0KlxvMY0EvTOBlWpE5hZxdCS_ZvtdlEZdpAKlB/exec";
+
+const hasRemote = SYNC_URL.startsWith("https://script.google.com/");
+let userName = "";
+let lastUpdatedAt = 0;
+let pendingSave = false;
+
+function initUser(){
+  try{ userName = localStorage.getItem('careone-user') || ""; }catch(e){}
+  if(hasRemote && !userName){
+    userName = (prompt("請輸入你的名字（會顯示給其他共用者）","") || "匿名").trim() || "匿名";
+    try{ localStorage.setItem('careone-user', userName); }catch(e){}
+  }
+}
+
+/* ===== 儲存（雲端共用 → Claude → 本機 三層自動選擇）===== */
+async function loadData(){
+  if(hasRemote){
+    try{
+      const r = await fetch(SYNC_URL + "?t=" + Date.now());
+      const j = await r.json();
+      if(j && j.data) data = j.data;
+      lastUpdatedAt = j.updatedAt || 0;
+      setStatus("✓ 已載入共用資料" + (j.user ? `（上次更新：${j.user}）` : ""));
+      return;
+    }catch(e){ setStatus("⚠ 無法連線共用資料庫，改用本機模式"); }
+  }
+  if(window.storage && window.storage.get){
+    try{
+      const r = await window.storage.get(STORE_KEY);
+      if(r && r.value) data = JSON.parse(r.value);
+      setStatus("✓ 已載入儲存的資料");
+      return;
+    }catch(e){}
+  }
+  try{
+    const s = localStorage.getItem(STORE_KEY);
+    if(s) data = JSON.parse(s);
+    setStatus("✓ 已載入本機資料");
+  }catch(e){ setStatus("（尚無儲存資料，開始使用吧）"); }
+}
+let saveTimer=null;
+function saveData(){
+  clearTimeout(saveTimer);
+  pendingSave = true;
+  setStatus("儲存中…");
+  saveTimer=setTimeout(async ()=>{
+    const now = new Date().toLocaleTimeString('zh-TW',{hour12:false});
+    if(hasRemote){
+      try{
+        const r = await fetch(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
+        const j = await r.json();
+        lastUpdatedAt = j.updatedAt || Date.now();
+        setStatus("✓ 已同步到共用資料庫 " + now + `（${userName}）`);
+      }catch(e){ setStatus("⚠ 同步失敗，請按 🔄 同步重試"); }
+      pendingSave = false;
+      return;
+    }
+    if(window.storage && window.storage.set){
+      try{
+        await window.storage.set(STORE_KEY, JSON.stringify(data));
+        setStatus("✓ 已自動儲存 " + now);
+        pendingSave = false;
+        return;
+      }catch(e){}
+    }
+    try{
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      setStatus("✓ 已儲存(本機) " + now);
+    }catch(e){ setStatus("⚠ 儲存失敗"); }
+    pendingSave = false;
+  }, 500);
+}
+
+/* ===== 自動拉取他人更新 ===== */
+async function pollRemote(force){
+  if(!hasRemote || pendingSave) return;
+  if(document.getElementById('modalBg').classList.contains('show')) return;  // 編輯中不打擾
+  if(!force && tipPinned) return;  // 釘選閱讀中不打擾
+  try{
+    const r = await fetch(SYNC_URL + "?t=" + Date.now());
+    const j = await r.json();
+    if(j && j.updatedAt && (force || j.updatedAt > lastUpdatedAt)){
+      if(j.updatedAt !== lastUpdatedAt){
+        data = j.data || data;
+        lastUpdatedAt = j.updatedAt;
+        render();
+        toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
+      }
+      setStatus("✓ 已同步 " + new Date().toLocaleTimeString('zh-TW',{hour12:false}) + (j.user?`（上次更新：${j.user}）`:""));
+    }
+  }catch(e){}
+}
+async function manualSync(){
+  if(!hasRemote){ toast("尚未設定共用資料庫（見 部署教學.md）"); return; }
+  setStatus("同步中…");
+  await pollRemote(true);
+}
+function setStatus(t){ document.getElementById('saveStatus').textContent=t; }
+function colorOf(org, name){
+  const key = name.trim();
+  for(const g of GROUPS[org]) if(g.names.includes(key)) return g.color;
+  return null;
+}
+function getRec(org, dateISO, zone){
+  return (data[org][dateISO]||{})[zone];
+}
+
+/* ===== PDF 解析（逐人 + 已驗證修正版）===== */
+async function parsePDF(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+  let org=null, dateISO=null, curZone=null;
+  let colName=null, colAddr=null, colNote=null;
+  let pending=null;
+  const zones={};
+  const unknowns=[];
+  const distRe = new RegExp("(台北市|新北市|基隆市|桃園市)?(" + DISTRICTS.join("|") + ")區");
+  const nameRe = /^[\u4e00-\u9fff]{2,6}([-－][\u4e00-\u9fff]{1,3})?$/;
+
+  function ensureZone(z){
+    if(!zones[z]) zones[z]={count:0, districts:[], people:{}};
+    return zones[z];
+  }
+  function finalize(){
+    if(pending && pending.zone){
+      let d = pending.district;
+      if(!d){
+        // 機構別名比對（例：瑞芳礦工護理之家 → 瑞礦）
+        const blob = (pending.name||"") + " " + pending.notes.join(" ");
+        for(const [kw, alias] of INSTITUTIONS){
+          if(blob.includes(kw)){ d = alias; break; }
+        }
+      }
+      if(!d){ d = "未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
+      const z = ensureZone(pending.zone);
+      if(!z.districts.includes(d)) z.districts.push(d);
+      if(!z.people[d]) z.people[d]=[];
+      z.people[d].push({
+        name: pending.name || "（未識別）",
+        addr: pending.addr || "",
+        note: pending.notes.join(" ").replace(/\s+/g," ").trim()
+      });
+    }
+    pending=null;
+  }
+
+  for(let p=1;p<=pdf.numPages;p++){
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const lines = {};
+    for(const it of tc.items){
+      const s = it.str && it.str.trim();
+      if(!s) continue;
+      const y = Math.round(it.transform[5]/3)*3;
+      (lines[y] = lines[y]||[]).push({str:s, x:it.transform[4]});
+    }
+    const ys = Object.keys(lines).map(Number).sort((a,b)=>b-a);
+
+    for(const y of ys){
+      const items = lines[y].sort((a,b)=>a.x-b.x);
+      const lineText = items.map(i=>i.str).join("");
+      if(lineText.includes("careone.com.tw") || /^\d{4}\/\d{1,2}\/\d{1,2}/.test(lineText)) continue;
+      if(!org){
+        if(lineText.includes("常春藤")) org="ivy";
+        else if(lineText.includes("長青樹")) org="tree";
+      }
+      if(lineText.includes("護理所")) continue;  // 頁首標題列跳過
+      if(!dateISO){
+        const m = lineText.match(/(1\d{2})-(\d{2})-(\d{2})/);
+        if(m) dateISO = `${+m[1]+1911}-${m[2]}-${m[3]}`;
+      }
+      for(const it of items){
+        if(it.str==="姓名") colName = it.x;
+        else if(it.str==="電話"||it.str==="地址") colAddr = it.x;
+        else if(it.str==="備註") colNote = it.x;
+      }
+      const zm = lineText.match(/([A-Z]\d*)區總人數[：:]\s*(\d+)/);
+      if(zm){
+        finalize();
+        curZone = zm[1];
+        ensureZone(curZone).count = +zm[2];
+        continue;
+      }
+      if(!curZone) continue;
+
+      for(const it of items){
+        const t = it.str;
+        // 姓名（新個案開始）
+        if(colName!==null && Math.abs(it.x-colName)<45 && nameRe.test(t) && !NAME_SKIP.has(t)){
+          finalize();
+          pending = {name:t, zone:curZone, district:null, addr:null, notes:[]};
+          continue;
+        }
+        // 地址（行政區）
+        const dm = t.match(distRe);
+        if(dm && colAddr!==null && Math.abs(it.x-colAddr)<130){
+          let d = dm[2];
+          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
+          if(dm[1]==="桃園市") d="桃園";
+          if(!pending) pending = {name:null, zone:curZone, district:null, addr:null, notes:[]};
+          if(pending.district===null){
+            pending.district = d;
+            pending.addr = t;
+          }else{
+            pending.addr = (pending.addr||"") + " / " + t;  // 多地址併入顯示，分區以第一個為準
+          }
+          continue;
+        }
+        // 地址接續行（非行政區片段）
+        if(pending && pending.addr && colAddr!==null && Math.abs(it.x-colAddr)<130 && /^[\u4e00-\u9fff0-9之樓號巷弄段路街區里()（）-]+$/.test(t) && !NAME_SKIP.has(t)){
+          pending.addr += t;
+          continue;
+        }
+        // 備註
+        if(pending && colNote!==null && it.x >= colNote-18 && !NOTE_SKIP.has(t) && !NOTE_SKIP_PREFIX.some(pf=>t.startsWith(pf))){
+          pending.notes.push(t);
+        }
+      }
+    }
+    // ★ 不在頁尾 finalize —— 跨頁的個案（姓名在上一頁、地址在下一頁）可正確接續
+  }
+  finalize();
+  return {org, dateISO, zones, unknowns, filename:file.name};
+}
+
+async function handleFiles(files){
+  const report = document.getElementById('parseReport');
+  const msgs=[];
+  let ok=0;
+  for(const f of files){
+    if(!f.name.toLowerCase().endsWith('.pdf')){ msgs.push(`⚠ ${f.name}：非 PDF，略過`); continue; }
+    try{
+      const r = await parsePDF(f);
+      if(!r.org || !r.dateISO || Object.keys(r.zones).length===0){
+        msgs.push(`⚠ ${f.name}：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
+        continue;
+      }
+      if(!data[r.org][r.dateISO]) data[r.org][r.dateISO]={};
+      const parts=[];
+      let mismatch=[];
+      for(const [z,info] of Object.entries(r.zones)){
+        data[r.org][r.dateISO][z] = {count:info.count, districts:info.districts, people:info.people};
+        const parsed = Object.values(info.people).reduce((s,a)=>s+a.length,0);
+        if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
+        const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
+        parts.push(`${z}區${info.count}人（${dd||"—"}）`);
+      }
+      let line = `✅ ${f.name} → ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
+      if(r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
+      if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
+      msgs.push(line);
+      ok++;
+      curOrg = r.org;
+      curYM = r.dateISO.slice(0,7);
+    }catch(e){
+      msgs.push(`❌ ${f.name}：解析錯誤 ${e.message}`);
+    }
+  }
+  report.innerHTML = msgs.join("<br>");
+  report.className = "parse-report" + (ok===0 ? " err" : "");
+  report.style.display = "block";
+  if(ok>0){ saveData(); }
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.org===curOrg));
+  render();
+  toast(ok>0 ? `已更新 ${ok} 個檔案的資料` : "沒有成功解析的檔案");
+}
+
+/* ===== 表格 ===== */
+function zonesForMonth(org, ym){
+  const set = new Set(DEFAULT_ZONES[org]);
+  for(const [d, zs] of Object.entries(data[org])){
+    if(d.startsWith(ym)) Object.keys(zs).forEach(z=>set.add(z));
+  }
+  return [...set].sort();
+}
+function render(){
+  hideTipNow();
+  const [Y,M] = curYM.split("-").map(Number);
+  document.getElementById('monthLabel').textContent = `${Y}年${M}月`;
+  const days = new Date(Y, M, 0).getDate();
+  const zones = zonesForMonth(curOrg, curYM);
+  const todayISO = new Date().toISOString().slice(0,10);
+
+  let html = "<thead><tr><th>日</th><th>週</th>";
+  for(const z of zones) html += `<th>人數</th><th class="zone">${z}區 行政區</th>`;
+  html += "</tr></thead><tbody>";
+
+  for(let d=1; d<=days; d++){
+    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+    const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
+    const today = dateISO===todayISO ? " today" : "";
+    html += `<tr class="${wknd}${today}"><td class="day">${d}</td><td class="wd">${wd}</td>`;
+    const rec = data[curOrg][dateISO] || {};
+    for(const z of zones){
+      const info = rec[z];
+      const cnt = info ? info.count : "";
+      let chips = "";
+      if(info) info.districts.forEach((name, i)=>{
+        const c = colorOf(curOrg, name);
+        const ppl = info.people && info.people[name] ? info.people[name].length : 0;
+        const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
+        const unk = name==="未判定" ? " unknown" : "";
+        chips += `<span class="chip${unk}" draggable="true" style="${c?`background:${c};`:""}"
+          ondragstart="dragStart(event,'${dateISO}','${z}',${i})" ondragend="dragEnd(event)"
+          onmouseenter="chipEnter(event,'${dateISO}','${z}',${i})" onmouseleave="chipLeave()"
+          onclick="chipPin(event,'${dateISO}','${z}',${i})"
+          >${name}${badge}<span class="x" onclick="quickRemove(event,'${dateISO}','${z}',${i})">✕</span></span>`;
+      });
+      chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
+      html += `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`;
+      html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
+        ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
+    }
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  document.getElementById('mainTable').innerHTML = html;
+  renderLegend();
+}
+function renderLegend(){
+  let h = `<h3>🎨 ${ORG_NAME[curOrg]}｜鄰近區顏色圖例（拖曳搬區、滑到標籤看名單並可捲動、點標籤釘選、✕ 移除、「＋」新增）</h3>`;
+  GROUPS[curOrg].forEach((g,i)=>{
+    h += `<div class="row"><div class="sw" style="background:${g.color}"></div><b>${i+1}.</b> ${g.names.join("、")}</div>`;
+  });
+  document.getElementById('legend').innerHTML = h;
+}
+
+/* ===== 拖曳搬移 ===== */
+function dragStart(ev, dateISO, zone, idx){
+  dragInfo = {dateISO, zone, idx};
+  ev.dataTransfer.effectAllowed = "move";
+  ev.target.classList.add('dragging');
+  hideTipNow();
+}
+function dragEnd(ev){ ev.target.classList.remove('dragging'); }
+function dragOver(ev){
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = "move";
+  ev.currentTarget.classList.add('dropover');
+}
+function dragLeave(ev){ ev.currentTarget.classList.remove('dropover'); }
+function dropChip(ev){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('dropover');
+  if(!dragInfo) return;
+  const dstDate = ev.currentTarget.dataset.date;
+  const dstZone = ev.currentTarget.dataset.zone;
+  const {dateISO:srcDate, zone:srcZone, idx} = dragInfo;
+  dragInfo = null;
+  if(srcDate===dstDate && srcZone===dstZone) return;
+
+  const src = getRec(curOrg, srcDate, srcZone);
+  if(!src) return;
+  const name = src.districts[idx];
+  const people = (src.people && src.people[name]) ? src.people[name] : [];
+  src.districts.splice(idx,1);
+  if(src.people) delete src.people[name];
+  if(people.length) src.count = Math.max(0, (src.count||0) - people.length);
+  if(!data[curOrg][dstDate]) data[curOrg][dstDate]={};
+  if(!data[curOrg][dstDate][dstZone]) data[curOrg][dstDate][dstZone]={count:0, districts:[], people:{}};
+  const dst = data[curOrg][dstDate][dstZone];
+  if(!dst.districts.includes(name)) dst.districts.push(name);
+  if(people.length){
+    if(!dst.people) dst.people={};
+    dst.people[name] = (dst.people[name]||[]).concat(people);
+    dst.count = (dst.count||0) + people.length;
+  }
+  saveData(); render();
+  toast(`已將「${name}」移到 ${dstZone}區${people.length?`（含 ${people.length} 人）`:""}`);
+}
+
+/* ===== 個案名單浮標視窗（錨定＋可捲動＋可釘選）===== */
+const tipEl = document.getElementById('tip');
+let tipPinned = false;
+let tipKey = null;         // 目前顯示的 "date|zone|idx"
+let tipHideTimer = null;
+
+function buildTipContent(dateISO, zone, idx){
+  const rec = getRec(curOrg, dateISO, zone);
+  if(!rec) return false;
+  const name = rec.districts[idx];
+  if(name===undefined) return false;
+  const ppl = (rec.people && rec.people[name]) ? rec.people[name] : [];
+  document.getElementById('tipTitle').textContent = `📍 ${name}（${ppl.length||"—"} 人）｜${dateISO} ${zone}區`;
+  let h = "";
+  if(ppl.length===0){
+    h = `<div class="none">此標籤為手動新增，尚無個案明細</div>`;
+  }else{
+    ppl.forEach((p,i)=>{
+      h += `<div class="person"><div class="pname">${i+1}. ${p.name}</div>`;
+      if(p.addr) h += `<div class="paddr">🏠 ${p.addr}</div>`;
+      if(p.note) h += `<div class="pnote">📝 ${p.note}</div>`;
+      h += `</div>`;
+    });
+  }
+  document.getElementById('tipBody').innerHTML = h;
+  return true;
+}
+function positionTip(anchorEl){
+  const r = anchorEl.getBoundingClientRect();
+  const W = 360, pad = 8;
+  let x = Math.min(Math.max(pad, r.left), window.innerWidth - W - pad);
+  tipEl.style.left = x + "px";
+  const spaceBelow = window.innerHeight - r.bottom - 14;
+  const spaceAbove = r.top - 14;
+  const body = document.querySelector('#tip .tip-body');
+  if(spaceBelow >= 180 || spaceBelow >= spaceAbove){
+    tipEl.style.top = (r.bottom + 6) + "px";
+    tipEl.style.bottom = "";
+    body.style.maxHeight = Math.max(140, Math.min(460, spaceBelow - 46)) + "px";
+  }else{
+    tipEl.style.top = "";
+    tipEl.style.bottom = (window.innerHeight - r.top + 6) + "px";
+    body.style.maxHeight = Math.max(140, Math.min(460, spaceAbove - 46)) + "px";
+  }
+}
+function chipEnter(ev, dateISO, zone, idx){
+  clearTimeout(tipHideTimer);
+  if(tipPinned) return;                    // 已釘選就不換內容
+  const key = `${dateISO}|${zone}|${idx}`;
+  if(!buildTipContent(dateISO, zone, idx)) return;
+  tipKey = key;
+  tipEl.style.display = "block";
+  tipEl.classList.remove('pinned');
+  document.getElementById('tipHint').textContent = "點標籤可釘選";
+  positionTip(ev.currentTarget);
+}
+function chipLeave(){ scheduleTipHide(); }
+function tipHoverIn(){ clearTimeout(tipHideTimer); }   // 滑進視窗 → 不關閉，可捲動
+function tipHoverOut(){ scheduleTipHide(); }
+function scheduleTipHide(){
+  if(tipPinned) return;
+  clearTimeout(tipHideTimer);
+  tipHideTimer = setTimeout(()=>{ tipEl.style.display="none"; tipKey=null; }, 320);
+}
+function chipPin(ev, dateISO, zone, idx){
+  ev.stopPropagation();
+  const key = `${dateISO}|${zone}|${idx}`;
+  if(tipPinned && tipKey===key){ hideTipNow(); return; }  // 再點一次取消釘選
+  if(!buildTipContent(dateISO, zone, idx)) return;
+  tipKey = key;
+  tipPinned = true;
+  tipEl.style.display = "block";
+  tipEl.classList.add('pinned');
+  document.getElementById('tipHint').textContent = "已釘選｜✕ 或再點標籤關閉";
+  positionTip(ev.currentTarget);
+}
+function hideTipNow(){
+  tipPinned = false;
+  tipEl.style.display = "none";
+  tipEl.classList.remove('pinned');
+  tipKey = null;
+  clearTimeout(tipHideTimer);
+}
+function hideTip(){ if(!tipPinned){ tipEl.style.display="none"; tipKey=null; } }
+// 點視窗以外處 → 關閉釘選
+document.addEventListener('click', (e)=>{
+  if(tipPinned && !tipEl.contains(e.target)) hideTipNow();
+});
+// 捲動頁面時關閉未釘選的視窗（位置會跑掉）
+window.addEventListener('scroll', ()=>{ if(!tipPinned) hideTip(); }, true);
+
+/* ===== 快速移除 ===== */
+function quickRemove(ev, dateISO, zone, idx){
+  ev.stopPropagation();
+  hideTipNow();
+  const rec = getRec(curOrg, dateISO, zone);
+  if(!rec) return;
+  const name = rec.districts[idx];
+  const ppl = (rec.people && rec.people[name]) ? rec.people[name].length : 0;
+  if(ppl && !confirm(`「${name}」含 ${ppl} 筆個案資料，確定移除？（人數不會自動變更）`)) return;
+  rec.districts.splice(idx, 1);
+  if(rec.people) delete rec.people[name];
+  saveData(); render();
+  toast(`已移除 ${name}`);
+}
+
+/* ===== 操作 ===== */
+function switchOrg(org){
+  curOrg = org;
+  hideTipNow();
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.org===org));
+  render();
+}
+function navMonth(dir){
+  let [Y,M] = curYM.split("-").map(Number);
+  M += dir;
+  if(M===0){M=12;Y--;} if(M===13){M=1;Y++;}
+  curYM = `${Y}-${String(M).padStart(2,'0')}`;
+  render();
+}
+function clearMonth(){
+  if(!confirm(`確定清除 ${ORG_NAME[curOrg]} ${curYM} 的所有資料？`)) return;
+  for(const d of Object.keys(data[curOrg])) if(d.startsWith(curYM)) delete data[curOrg][d];
+  saveData(); render(); toast("已清除本月資料");
+}
+
+/* ===== 快選 Modal ===== */
+function openModal(dateISO, zone){
+  hideTipNow();
+  editing = {org:curOrg, dateISO, zone};
+  const rec = getRec(curOrg, dateISO, zone);
+  tempDists = rec ? [...rec.districts] : [];
+  document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
+  document.getElementById('editCount').value = rec ? rec.count : "";
+  document.getElementById('customInput').value = "";
+  renderPicker();
+  document.getElementById('modalBg').classList.add('show');
+}
+function renderPicker(){
+  const sel = document.getElementById('selectedArea');
+  if(tempDists.length===0){
+    sel.innerHTML = '<div class="empty">尚未選擇，點下方色塊即可加入</div>';
+  }else{
+    sel.innerHTML = tempDists.map((name,i)=>{
+      const c = colorOf(curOrg, name);
+      return `<span class="chip" style="${c?`background:${c};`:""}">${name}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
+    }).join("");
+  }
+  const pg = document.getElementById('pickerGroups');
+  pg.innerHTML = GROUPS[curOrg].map((g,gi)=>{
+    const btns = g.names.map(name=>{
+      const on = tempDists.includes(name) ? " on" : "";
+      return `<span class="pick${on}" style="background:${g.color}" onclick="togglePick('${name}')">${name}</span>`;
+    }).join("");
+    return `<div class="pick-group"><div class="gtitle">第 ${gi+1} 組</div>${btns}</div>`;
+  }).join("");
+}
+function togglePick(name){
+  const i = tempDists.indexOf(name);
+  if(i>=0) tempDists.splice(i,1);
+  else tempDists.push(name);
+  renderPicker();
+}
+function tempRemove(i){ tempDists.splice(i,1); renderPicker(); }
+function addCustom(){
+  const v = document.getElementById('customInput').value.trim();
+  if(!v) return;
+  if(!tempDists.includes(v)) tempDists.push(v);
+  document.getElementById('customInput').value = "";
+  renderPicker();
+}
+function closeModal(){ document.getElementById('modalBg').classList.remove('show'); editing=null; }
+function saveCell(){
+  if(!editing) return;
+  const cnt = parseInt(document.getElementById('editCount').value)||0;
+  if(!data[editing.org][editing.dateISO]) data[editing.org][editing.dateISO]={};
+  const old = data[editing.org][editing.dateISO][editing.zone];
+  const people = {};
+  if(old && old.people){
+    for(const d of tempDists) if(old.people[d]) people[d] = old.people[d];
+  }
+  data[editing.org][editing.dateISO][editing.zone] = {count:cnt, districts:[...tempDists], people};
+  saveData(); closeModal(); render(); toast("已更新");
+}
+function deleteCell(){
+  if(!editing) return;
+  const rec = data[editing.org][editing.dateISO];
+  if(rec){ delete rec[editing.zone]; if(Object.keys(rec).length===0) delete data[editing.org][editing.dateISO]; }
+  saveData(); closeModal(); render(); toast("已刪除");
+}
+
+/* CSV 匯出 */
+function exportCSV(){
+  const [Y,M] = curYM.split("-").map(Number);
+  const days = new Date(Y, M, 0).getDate();
+  const zones = zonesForMonth(curOrg, curYM);
+  let rows = [["日期","週", ...zones.flatMap(z=>[`${z}區人數`,`${z}區行政區`])]];
+  for(let d=1; d<=days; d++){
+    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+    const rec = data[curOrg][dateISO]||{};
+    const row=[d, wd];
+    for(const z of zones){
+      const info=rec[z];
+      const dd = info ? info.districts.map(n=>{
+        const c = info.people && info.people[n] ? info.people[n].length : 0;
+        return c ? `${n}(${c})` : n;
+      }).join("、") : "";
+      row.push(info?info.count:"", dd);
+    }
+    rows.push(row);
+  }
+  const csv = "\uFEFF" + rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download = `${ORG_NAME[curOrg]}_${curYM}_行程表.csv`;
+  a.click();
+}
+
+/* Toast */
+let toastTimer=null;
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+/* 拖曳上傳 */
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e=>{e.preventDefault(); dz.classList.add('drag');});
+dz.addEventListener('dragleave', ()=>dz.classList.remove('drag'));
+dz.addEventListener('drop', e=>{
+  e.preventDefault(); dz.classList.remove('drag');
+  handleFiles([...e.dataTransfer.files]);
+});
+document.getElementById('fileInput').addEventListener('change', e=>{
+  handleFiles([...e.target.files]);
+  e.target.value="";
+});
+document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
+
+/* 啟動 */
+(async ()=>{
+  const now = new Date();
+  curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  initUser();
+  await loadData();
+  render();
+  if(hasRemote) setInterval(pollRemote, 45000);  // 每 45 秒自動拉取他人更新
+})();
+</script>
+</body>
+</html>
