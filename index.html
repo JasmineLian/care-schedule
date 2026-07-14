@@ -252,7 +252,7 @@ async function loadData(){
       const j = await r.json();
       if(j && j.data) data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
-      setStatus("✓ 已載入共用資料" + (j.user ? `（上次更新：${j.user}）` : ""));
+      setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : ""));
       return;
     }catch(e){ setStatus("⚠ 無法連線共用資料庫，改用本機模式"); }
   }
@@ -282,7 +282,7 @@ function saveData(){
         const r = await fetch(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
         const j = await r.json();
         lastUpdatedAt = j.updatedAt || Date.now();
-        setStatus("✓ 已同步到共用資料庫 " + now + `（${userName}）`);
+        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）`);
       }catch(e){ setStatus("⚠ 同步失敗，請按 🔄 同步重試"); }
       pendingSave = false;
       return;
@@ -318,7 +318,7 @@ async function pollRemote(force){
         render();
         toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
       }
-      setStatus("✓ 已同步 " + new Date().toLocaleTimeString('zh-TW',{hour12:false}) + (j.user?`（上次更新：${j.user}）`:""));
+      setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user?`（${j.user}）`:""));
     }
   }catch(e){}
 }
@@ -328,6 +328,18 @@ async function manualSync(){
   await pollRemote(true);
 }
 function setStatus(t){ document.getElementById('saveStatus').textContent=t; }
+function fmtDT(ts){
+  if(!ts) return "—";
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function fmtDT(ts){
+  if(!ts) return "—";
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 function colorOf(org, name){
   const key = name.trim();
   for(const g of GROUPS[org]) if(g.names.includes(key)) return g.color;
