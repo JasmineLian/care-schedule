@@ -11,8 +11,8 @@
   --brand:#305496; --brand2:#4472c4; --line:#e4e7ee;
 }
 *{box-sizing:border-box; margin:0; padding:0;}
-body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); padding:16px;}
-.wrap{max-width:1320px; margin:0 auto;}
+body{font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); padding:10px 8px;}
+.wrap{max-width:none; margin:0 auto;}
 h1{font-size:22px; color:var(--brand); margin-bottom:4px;}
 .sub{color:var(--muted); font-size:13px; margin-bottom:14px;}
 
@@ -34,18 +34,27 @@ h1{font-size:22px; color:var(--brand); margin-bottom:4px;}
 .btn:hover{background:#eef3fc;}
 .btn.danger{color:#c0392b;}
 .btn.primary{background:var(--brand); color:#fff; border-color:var(--brand);}
+.btn:disabled{opacity:.45; cursor:not-allowed;}
 .spacer{flex:1;}
 .status{font-size:12px; color:var(--muted);}
 
-.table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; margin-bottom:14px;}
+.zonebar{background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-bottom:10px; font-size:13px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+.zonebar b{color:var(--brand); margin-right:2px;}
+.zchip{padding:4px 13px; border-radius:14px; border:1.5px solid var(--line); cursor:pointer; user-select:none; color:var(--muted); background:#f2f3f7; font-weight:bold;}
+.zchip.on{background:var(--brand); color:#fff; border-color:var(--brand);}
+.zchip.all{border-style:dashed; color:var(--brand2); background:#fff; font-weight:normal;}
+.table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; margin-bottom:14px; max-height:calc(100vh - 140px); min-height:280px;}
 table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
 th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
-thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px;}
+thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px; box-shadow:0 2px 4px rgba(0,0,0,.15);}
 thead th.zone{background:var(--brand2);}
 td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd;}
 tr.wknd td{background:#f1f2f6;}
 tr.wknd td.day,tr.wknd td.wd{background:#e8eaf0;}
 td.cnt{width:56px; font-weight:bold; font-size:14px; cursor:pointer;}
+td.nurse{width:72px; cursor:pointer; color:#4a6da7; font-size:12.5px;}
+td.nurse:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
+th.nursehd{font-size:12px;}
 td.cnt:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
 td.dists{text-align:left; min-width:200px;}
 td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; background:#eef3fc !important;}
@@ -54,6 +63,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 .chip{display:inline-flex; align-items:center; gap:3px; padding:2px 6px 2px 9px; border-radius:12px; margin:2px 3px; font-size:12.5px; font-weight:bold; color:#2d3436; background:#eceff4; border:1px solid rgba(0,0,0,.07); cursor:grab; user-select:none;}
 .chip:active{cursor:grabbing;}
 .chip.dragging{opacity:.4;}
+.chip.dropover{outline:3px dashed #e67e22; outline-offset:1px; transform:scale(1.08); background:#fff3e0 !important;}
 .chip.unknown{border:1.5px dashed #c0392b;}
 .chip .cbadge{background:rgba(0,0,0,.55); color:#fff; font-size:10.5px; border-radius:9px; padding:0 5px; line-height:15px; font-weight:bold;}
 .chip .x{cursor:pointer; font-size:11px; opacity:.45; padding:0 2px; border-radius:50%; line-height:1;}
@@ -71,10 +81,23 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 #tip .tip-body{overflow-y:auto; overscroll-behavior:contain; padding:4px 12px 10px;}
 #tip .tip-body::-webkit-scrollbar{width:8px;}
 #tip .tip-body::-webkit-scrollbar-thumb{background:#c5cbd6; border-radius:4px;}
+#tip .tip-foot{padding:8px 12px; border-top:1px solid var(--line); background:#fff; border-radius:0 0 10px 10px; text-align:right;}
+#tip .psel{width:15px; height:15px; accent-color:var(--brand2); cursor:pointer; margin-right:2px; vertical-align:middle;}
 #tip .person{padding:7px 0; border-bottom:1px dashed #edf0f5;}
+#tip .person[draggable="true"]{cursor:grab;}
+#tip .person.dragging{opacity:.4;}
+#tip .person .phandle{color:#b8bfca; margin-right:2px; font-size:11px;}
 #tip .person:last-child{border-bottom:none;}
-#tip .pname{font-weight:bold;}
+#tip .pname{font-weight:bold; display:flex; align-items:center; flex-wrap:wrap; gap:4px;}
+#tip .drag-h{color:#b6bcc7; cursor:grab; font-size:13px;}
+.pmove{font-size:10.5px; color:var(--brand2); border:1px solid var(--brand2); border-radius:8px; padding:1px 8px; cursor:pointer; font-weight:normal; margin-left:auto;}
+.pmove:hover{background:var(--brand2); color:#fff;}
+.pmenu{margin-top:5px; background:#f2f6ff; border-radius:8px; padding:5px 8px; font-size:11.5px; color:var(--muted);}
+.pzbtn{display:inline-block; background:#fff; border:1.5px solid var(--brand2); color:var(--brand2); border-radius:10px; padding:1px 10px; margin:2px 3px; cursor:pointer; font-weight:bold;}
+.pzbtn:hover{background:var(--brand2); color:#fff;}
 #tip .paddr{color:#4a6da7; font-size:12px; margin-top:1px;}
+#tip .plast{color:#8a6d3b; font-size:11.5px; margin-top:1px;}
+#tip .ptube{color:#7b1fa2; font-size:11.5px; margin-top:1px;}
 #tip .pnote{color:var(--muted); font-size:11.5px; margin-top:2px; line-height:1.45;}
 #tip .none{color:var(--muted); padding:8px 0;}
 #tip.pinned{box-shadow:0 6px 24px rgba(0,0,0,.28), 0 0 0 2px var(--brand2);}
@@ -111,7 +134,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <body>
 <div class="wrap">
   <h1>📋 居護行程動態表</h1>
-  <div class="sub">上傳 PDF 自動解析｜🖱 拖曳標籤可搬區｜滑到標籤看名單（可捲動），<b>點標籤可釘選</b>｜標籤數字＝該區人數</div>
+  <div class="sub">上傳 PDF 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
 
   <div class="tabs">
     <div class="tab active" data-org="ivy" onclick="switchOrg('ivy')">常春藤</div>
@@ -132,12 +155,19 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       <div class="month-label" id="monthLabel"></div>
       <button onclick="navMonth(1)">▶</button>
     </div>
+    <div class="month-nav" title="只顯示這個範圍的日期">
+      顯示&nbsp;<input type="number" id="dayFrom" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
+      &nbsp;～&nbsp;<input type="number" id="dayTo" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
+      &nbsp;日&nbsp;<button onclick="resetRange()" style="font-size:12px;">全月</button>
+    </div>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
     <button class="btn" onclick="manualSync()">🔄 同步最新</button>
     <div class="spacer"></div>
     <div class="status" id="saveStatus"></div>
   </div>
+
+  <div class="zonebar" id="zoneBar"></div>
 
   <div class="table-card"><table id="mainTable"></table></div>
 
@@ -154,6 +184,9 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     </span>
   </div>
   <div class="tip-body" id="tipBody"></div>
+  <div class="tip-foot" id="tipFoot" style="display:none;">
+    <button class="btn" id="splitBtn" disabled onclick="splitSelected()">✂ 勾選個案後拆分成小標籤</button>
+  </div>
 </div>
 
 <!-- 行政區快選 Modal -->
@@ -162,7 +195,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     <h3 id="modalTitle">編輯</h3>
     <label>👥 人數</label>
     <input type="number" id="editCount" min="0">
-    <label>📍 已選行政區（依順序，點 × 移除）</label>
+    <label>📍 已選標籤（依順序，可同名並存，點 × 移除）</label>
     <div class="selected-area" id="selectedArea"></div>
     <label>🎯 點選新增行政區（同組同色）</label>
     <div id="pickerGroups"></div>
@@ -187,35 +220,35 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 /* ===== 設定 ===== */
 const GROUPS = {
   ivy: [
-    {names:["松山","中山","大同","大安","信義"], color:"#F8BBD0"},
-    {names:["士林"], color:"#FFF59D"},
-    {names:["萬華","中正","文山"], color:"#FFCC80"},
+    {names:["士林","大同","中山","松山"], color:"#F8BBD0"},
+    {names:["萬華","中正","文山","大安","信義","康庭","福安"], color:"#FFF59D"},
+    {names:["平溪","雙溪","貢寮"], color:"#FFCC80"},
     {names:["深坑","石碇","坪林"], color:"#C8E6C9"},
-    {names:["南港","內湖","汐止","瑞芳"], color:"#90CAF9"},
+    {names:["南港","內湖","童音","瑞芳","瑞礦"], color:"#90CAF9"},
     {names:["基隆","金山","萬里"], color:"#CE93D8"},
-    {names:["元康","銀泰","瑞礦","童音","童心","康庭","福安"], color:"#CFD8DC"},
+    {names:["汐止","元康","銀泰","童心"], color:"#CFD8DC"},
   ],
   tree: [
-    {names:["北投","淡水","三芝","石門"], color:"#90CAF9"},
-    {names:["三重","蘆洲","五股","八里"], color:"#C8E6C9"},
-    {names:["泰山","新莊","板橋"], color:"#FFCC80"},
+    {names:["北投","淡水","三芝","石門","長勤"], color:"#90CAF9"},
+    {names:["三重","蘆洲","八里","愛心"], color:"#C8E6C9"},
+    {names:["泰山","新莊","板橋","吉康","盛禾"], color:"#FFCC80"},
     {names:["中和","永和","新店","烏來"], color:"#F8BBD0"},
     {names:["土城","樹林","三峽","林口","桃園"], color:"#CE93D8"},
-    {names:["吉康","盛禾","愛心","長勤"], color:"#CFD8DC"},
+    {names:["五股"], color:"#80CBC4"},
   ]
 };
-const DEFAULT_ZONES = { ivy:["A","B","C"], tree:["B","E","F"] };
+const DEFAULT_ZONES = { ivy:["A","B","C","D","G","H","J1","K","T"], tree:["B","D","E","F","G","J1"] };
 const ORG_NAME = { ivy:"常春藤", tree:"長青樹" };
 const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義","士林","北投","內湖","南港","文山",
 "板橋","三重","中和","永和","新莊","新店","土城","蘆洲","汐止","樹林","鶯歌","三峽","淡水","瑞芳",
 "五股","泰山","林口","深坑","石碇","坪林","三芝","石門","八里","平溪","雙溪","貢寮","金山","萬里","烏來",
-"安樂","暖暖","七堵","仁愛"];
+"安樂","暖暖","七堵","仁愛","桃園"];
 const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
 const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
 ["康庭","康庭"],["福安","福安"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
 const WEEK = ["日","一","二","三","四","五","六"];
 const STORE_KEY = "careone-schedule-v1";
-const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差"]);
+const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差","清寒","福保重大"]);
 const NOTE_SKIP = new Set(["費用","備註","說明","診斷","預計","收費","實際申報","電話","地址","更換管路","傷口","移除","住院","舊案","VPN","工作人員：","耗材：","小計：","部分負擔：","，支出："]);
 const NOTE_SKIP_PREFIX = ["方鼎掛號","申報核對","預約訪視：","社會資源","工作人員","部分負擔","小計","耗材","□","登入總表","醫囑單","護理紀錄","身體評估單"];
 
@@ -223,13 +256,13 @@ let data = { ivy:{}, tree:{} };
 let curOrg = "ivy";
 let curYM = null;
 let editing = null;
-let tempDists = [];
+let tempTags = [];
 let dragInfo = null;
 
 /* ===== 共用同步設定 =====
    ★ 部署到 GitHub 時：把下面引號內換成你的 Google Apps Script「網頁應用程式」網址
    （做法見「部署教學.md」）。留空 = 資料只存在本機瀏覽器。 */
-const SYNC_URL = "https://script.google.com/macros/s/AKfycby4uDv_JrY6_e0AqRzuRIF8YZLHdc0KlxvMY0EvTOBlWpE5hZxdCS_ZvtdlEZdpAKlB/exec";
+const SYNC_URL = "";
 
 const hasRemote = SYNC_URL.startsWith("https://script.google.com/");
 let userName = "";
@@ -252,6 +285,7 @@ async function loadData(){
       const j = await r.json();
       if(j && j.data) data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
+      migrateAll();
       setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : ""));
       return;
     }catch(e){ setStatus("⚠ 無法連線共用資料庫，改用本機模式"); }
@@ -260,6 +294,7 @@ async function loadData(){
     try{
       const r = await window.storage.get(STORE_KEY);
       if(r && r.value) data = JSON.parse(r.value);
+      migrateAll();
       setStatus("✓ 已載入儲存的資料");
       return;
     }catch(e){}
@@ -267,6 +302,7 @@ async function loadData(){
   try{
     const s = localStorage.getItem(STORE_KEY);
     if(s) data = JSON.parse(s);
+    migrateAll();
     setStatus("✓ 已載入本機資料");
   }catch(e){ setStatus("（尚無儲存資料，開始使用吧）"); }
 }
@@ -315,6 +351,7 @@ async function pollRemote(force){
       if(j.updatedAt !== lastUpdatedAt){
         data = j.data || data;
         lastUpdatedAt = j.updatedAt;
+        migrateAll();
         render();
         toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
       }
@@ -334,134 +371,282 @@ function fmtDT(ts){
   const p = n => String(n).padStart(2,'0');
   return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-function fmtDT(ts){
-  if(!ts) return "—";
-  const d = new Date(ts);
-  const p = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
 function colorOf(org, name){
   const key = name.trim();
   for(const g of GROUPS[org]) if(g.names.includes(key)) return g.color;
   return null;
 }
+
+/* ===== 資料結構 v2：標籤陣列（允許同名）＋ 舊格式相容 =====
+   舊：{count, districts:["汐止",...], people:{汐止:[...]}, nurse}
+   新：{count, tags:[{name:"汐止", people:[...]},...], nurse}   */
+function normalizeRec(rec){
+  if(!rec || rec.tags) return rec;
+  const tags = [];
+  (rec.districts||[]).forEach(d=>{
+    tags.push({name:d, people:(rec.people && rec.people[d]) ? rec.people[d] : []});
+  });
+  rec.tags = tags;
+  delete rec.districts;
+  delete rec.people;
+  return rec;
+}
+function migrateAll(){
+  for(const org of Object.keys(data)){
+    for(const day of Object.values(data[org]||{})){
+      for(const z of Object.keys(day)) normalizeRec(day[z]);
+    }
+  }
+}
 function getRec(org, dateISO, zone){
-  return (data[org][dateISO]||{})[zone];
+  const r = (data[org][dateISO]||{})[zone];
+  return r ? normalizeRec(r) : r;
+}
+function ensureCell(org, dateISO, zone){
+  if(!data[org][dateISO]) data[org][dateISO]={};
+  if(!data[org][dateISO][zone]) data[org][dateISO][zone]={count:0, tags:[]};
+  return normalizeRec(data[org][dateISO][zone]);
 }
 
-/* ===== PDF 解析（逐人 + 已驗證修正版）===== */
+/* ===== PDF 解析 v5.2：動態欄界分段重組＋錨點歸類（管路斷行）＋區塊歸位（備註/管路跑行）===== */
 async function parsePDF(file){
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
   let org=null, dateISO=null, curZone=null;
-  let colName=null, colAddr=null, colNote=null;
+  let colName=null,colAddr=null,colNote=null,colDiag=null,colPay=null,colFee=null;
+  let sub=false, colNameS=null, colAddrS=null, colChgS=null;
+  let colChg=null;
   let pending=null;
-  const zones={};
-  const unknowns=[];
+  const zones={}; const unknowns=[];
   const distRe = new RegExp("(台北市|新北市|基隆市|桃園市)?(" + DISTRICTS.join("|") + ")區");
-  const nameRe = /^[\u4e00-\u9fff]{2,6}([-－][\u4e00-\u9fff]{1,3})?$/;
+  const nameRe = /^[一-鿿]{2,7}([-－][一-鿿]{1,4})?$/;
+  const nameReject = /姓名|刷卡|順序|身分|收費|日期|實際|訪視|電話|地址|備註|診斷|聯絡|申報|管路|預計|說明|費用|序號|間隔|次數/;
+  const addrContRe = /^[一-鿿0-9之樓號巷弄段路街區里鄰()（）Ff/／-]+$/;
 
-  function ensureZone(z){
-    if(!zones[z]) zones[z]={count:0, districts:[], people:{}};
-    return zones[z];
-  }
+  function ensureZone(z){ if(!zones[z]) zones[z]={count:0,districts:[],people:{}}; return zones[z]; }
   function finalize(){
     if(pending && pending.zone){
       let d = pending.district;
       if(!d){
-        // 機構別名比對（例：瑞芳礦工護理之家 → 瑞礦）
-        const blob = (pending.name||"") + " " + pending.notes.join(" ");
-        for(const [kw, alias] of INSTITUTIONS){
-          if(blob.includes(kw)){ d = alias; break; }
-        }
+        const blob=(pending.name||"")+" "+pending.notes.join(" ");
+        for(const [kw,alias] of INSTITUTIONS){ if(blob.includes(kw)){ d=alias; break; } }
       }
-      if(!d){ d = "未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
-      const z = ensureZone(pending.zone);
+      if(!d){ d="未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
+      const z=ensureZone(pending.zone);
       if(!z.districts.includes(d)) z.districts.push(d);
       if(!z.people[d]) z.people[d]=[];
-      z.people[d].push({
-        name: pending.name || "（未識別）",
-        addr: pending.addr || "",
-        note: pending.notes.join(" ").replace(/\s+/g," ").trim()
-      });
+      const note = pending.notes.join(" ").replace(/\s*=\s*_{3,}/g,"").replace(/\s+/g," ").trim();
+      // 括號感知黏合：斷行片段若括號未閉合，直接相連不加空格（NG(16,SN+阿爾 / 傑) → NG(16,SN+阿爾傑)）
+      let tube = "";
+      for(const t of (pending.tubes||[])){
+        if(!tube){ tube = t; continue; }
+        const open = (tube.match(/[(（]/g)||[]).length, close = (tube.match(/[)）]/g)||[]).length;
+        tube += (open > close ? "" : " ") + t;
+      }
+      tube = tube.replace(/(?:\d{2,4}|0)\s*[\/+]\s*\d{2,4}(?:\+\d{2,4})?/g," ").replace(/\s+/g," ").trim().replace(/^[\/+ ]+|[\/+ ]+$/g,"");
+      z.people[d].push({name:pending.name||"（未識別）", addr:pending.addr||"", last:pending.last||"", tube, note});
     }
     pending=null;
   }
+  function cleanName(s){
+    s=s.replace(/1\d{2}-\d{2}-\d{2}/g,"");
+    s=s.replace(/[0-9A-Za-z().（）\/／+＋★@]+/g,"");
+    return s.replace(/^[-－ ]+|[-－ ]+$/g,"");
+  }
 
   for(let p=1;p<=pdf.numPages;p++){
-    const page = await pdf.getPage(p);
-    const tc = await page.getTextContent();
-    const lines = {};
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    const lines={};
     for(const it of tc.items){
-      const s = it.str && it.str.trim();
-      if(!s) continue;
-      const y = Math.round(it.transform[5]/3)*3;
-      (lines[y] = lines[y]||[]).push({str:s, x:it.transform[4]});
+      if(!it.str || !it.str.trim()) continue;
+      const y=Math.round(it.transform[5]/3)*3;
+      (lines[y]=lines[y]||[]).push({s:it.str, x:it.transform[4]});
     }
-    const ys = Object.keys(lines).map(Number).sort((a,b)=>b-a);
-
-    for(const y of ys){
-      const items = lines[y].sort((a,b)=>a.x-b.x);
-      const lineText = items.map(i=>i.str).join("");
-      if(lineText.includes("careone.com.tw") || /^\d{4}\/\d{1,2}\/\d{1,2}/.test(lineText)) continue;
+    const ys=Object.keys(lines).map(Number).sort((a,b)=>b-a);
+    // ── v5.2 跑行歸位：多行儲存格（備註/管路）垂直置中，第一行 y 會高於姓名列，
+    //    逐行掃描會誤歸給上一位。先找「序號+訪視日」個案起始列與「✚」第二列，
+    //    用（上一個✚ + 起始列）/2 當區塊上邊界；備註/管路若落在下一個個案的
+    //    區塊就先暫存（orphans），等該個案建立後再併入 ──
+    const rowsArr=[];
+    for(const yy of ys){
+      const items=lines[yy].sort((a,b)=>a.x-b.x);
+      const rcs=[];
+      for(const it of items){ for(const ch of it.s){ if(ch.trim()) rcs.push([ch,it.x]); } }
+      if(!rcs.length) continue;
+      rowsArr.push({y:yy, chars:rcs, joined:rcs.map(c=>c[0]).join("")});
+    }
+    const startRe=/^\d{1,2}1\d{2}-\d{2}-\d{2}/;
+    const starts=[];
+    let lastPlusY=null;
+    for(const r of rowsArr){
+      if(r.joined[0]==="✚" || r.joined[0]==="+"){ lastPlusY=r.y; continue; }
+      if(startRe.test(r.joined)) starts.push({y:r.y, top: lastPlusY!==null ? (lastPlusY + r.y)/2 : r.y+14});
+    }
+    const blockIdxOf=(y)=>{ let b=-1; for(let i=0;i<starts.length;i++){ if(y<=starts[i].top) b=i; else break; } return b; };
+    const orphans={};
+    let curBlock=-1;
+    const orphanOf=(b)=>orphans[b]||(orphans[b]={notes:[],tubes:[]});
+    const flushOrphans=()=>{ const o=orphans[curBlock]; if(o && pending){ pending.notes.push(...o.notes); pending.tubes.push(...o.tubes); delete orphans[curBlock]; } };
+    for(const rowL of rowsArr){
+      const chars=rowL.chars, joined=rowL.joined;
+      const bi=blockIdxOf(rowL.y);
+      if(joined.includes("careone.com.tw") || /^\d{4}\/\d{1,2}\/\d{1,2}/.test(joined)) continue;
+      if(joined.includes("預約訪視表") && joined.length<=30) continue;
       if(!org){
-        if(lineText.includes("常春藤")) org="ivy";
-        else if(lineText.includes("長青樹")) org="tree";
+        if(joined.includes("常春藤")) org="ivy";
+        else if(joined.includes("長青樹")) org="tree";
       }
-      if(lineText.includes("護理所")) continue;  // 頁首標題列跳過
+      if(joined.includes("護理所")) continue;
       if(!dateISO){
-        const m = lineText.match(/(1\d{2})-(\d{2})-(\d{2})/);
-        if(m) dateISO = `${+m[1]+1911}-${m[2]}-${m[3]}`;
+        const m=joined.match(/(1\d{2})-(\d{2})-(\d{2})/);
+        if(m) dateISO=`${+m[1]+1911}-${m[2]}-${m[3]}`;
       }
-      for(const it of items){
-        if(it.str==="姓名") colName = it.x;
-        else if(it.str==="電話"||it.str==="地址") colAddr = it.x;
-        else if(it.str==="備註") colNote = it.x;
-      }
-      const zm = lineText.match(/([A-Z]\d*)區總人數[：:]\s*(\d+)/);
+      const kwx=(kw)=>{ const i=joined.indexOf(kw); return i>=0 ? chars[i][1] : null; };
+      // 分區標頭（P5 無字母 → 其他）
+      const zm=joined.match(/([A-Z]?\d*)區總人數[：:]\s*(\d+)/);
       if(zm){
         finalize();
-        curZone = zm[1];
-        ensureZone(curZone).count = +zm[2];
+        let z=zm[1]||"";
+        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
+        curZone=z;
+        ensureZone(z).count=+zm[2];
+        continue;
+      }
+      // 頁首雜訊
+      if(/方鼎掛號|申報核對|預約訪視：|醫囑單|登入總表|護理紀錄|身體評估單|^舊案|社會資源|^工作人員|^部分負擔|^小計|^傷口=|^移除=/.test(joined)) continue;
+      // 副表表頭（新案：含「聯絡人」）
+      if(joined.includes("聯絡人") && joined.includes("姓名")){
+        sub=true;
+        let v=kwx("姓名");   if(v!==null) colNameS=v;
+        v=kwx("更換管路");   if(v!==null) colChgS=v;
+        continue;
+      }
+      if(sub && joined.includes("身分") && joined.includes("地址") && joined.length<=14){
+        const v=kwx("地址"); if(v!==null) colAddrS=v;
+        continue;
+      }
+      // 主表表頭（強標記）
+      const isHdr = joined.includes("更換管路") || joined.includes("家字號")
+        || (joined.includes("姓名") && (joined.includes("刷卡")||joined.includes("身分證")))
+        || (joined.includes("身分") && joined.includes("地址") && joined.includes("說明"))
+        || (joined.includes("備註") && ["診斷","預計","收費"].some(k=>joined.includes(k)) && !joined.includes("★") && !joined.includes("@"))
+        || (joined.includes("預計") && joined.includes("費用") && joined.length<=20);
+      if(isHdr){
+        if(joined.includes("家字號")||joined.includes("身分證")) sub=false;
+        let v=kwx("姓名"); if(v!==null) colName=v;
+        v=kwx("電話");
+        if(v!==null) colAddr=v; else { v=kwx("地址"); if(v!==null) colAddr=v; }
+        v=kwx("備註"); if(v!==null) colNote=v;
+        v=kwx("診斷"); if(v!==null) colDiag=v;
+        v=kwx("更換管路"); if(v!==null) colChg=v;
+        v=kwx("預計"); if(v!==null) colPay=v;
+        const fi=joined.indexOf("費用");
+        if(fi>=0 && chars[fi][1] > ((colNote!==null?colNote:colPay)||0)) colFee=chars[fi][1];
         continue;
       }
       if(!curZone) continue;
 
-      for(const it of items){
-        const t = it.str;
-        // 姓名（新個案開始）
-        if(colName!==null && Math.abs(it.x-colName)<45 && nameRe.test(t) && !NAME_SKIP.has(t)){
-          finalize();
-          pending = {name:t, zone:curZone, district:null, addr:null, notes:[]};
-          continue;
+      const seg=(lo,hi)=>chars.filter(c=>c[1]>=lo && c[1]<hi).map(c=>c[0]).join("").trim();
+      let nm="", ad="", nt="", tb="";
+      if(sub && colNameS!==null){
+        // ── 副表（新案）版面 ──
+        nm=cleanName(seg(colNameS-45, colNameS+75));
+        if(colAddrS!==null){
+          const hiA=(colChgS!==null)?colChgS-8:colAddrS+150;
+          ad=seg(colAddrS-130, hiA);
         }
-        // 地址（行政區）
-        const dm = t.match(distRe);
-        if(dm && colAddr!==null && Math.abs(it.x-colAddr)<130){
-          let d = dm[2];
-          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
-          if(dm[1]==="桃園市") d="桃園";
-          if(!pending) pending = {name:null, zone:curZone, district:null, addr:null, notes:[]};
-          if(pending.district===null){
-            pending.district = d;
-            pending.addr = t;
-          }else{
-            pending.addr = (pending.addr||"") + " / " + t;  // 多地址併入顯示，分區以第一個為準
+        if(colChgS!==null){ nt=seg(colChgS+60, 1e9); tb=seg(colChgS-20, colChgS+58); }
+      }else{
+        // ── 主表版面 ──
+        if(colName!==null) nm=cleanName(seg(colName-45, colName+75));
+        if(colAddr!==null){
+          let hi;
+          if(colDiag!==null) hi=colDiag-8;
+          else if(colNote!==null) hi=colNote-8;
+          else if(colPay!==null) hi=colPay-8;
+          else hi=colAddr+250;
+          ad=seg(colAddr-130, hi);
+        }
+        let loN=null;
+        if(colNote!==null && colPay!==null) loN=Math.min((colPay+colNote)/2, colPay+18);
+        else if(colNote!==null) loN=colNote-18;
+        else if(colPay!==null) loN=colPay+18;
+        if(loN!==null){
+          const hiN=(colFee!==null && colFee>loN)?colFee-8:1e9;
+          nt=seg(loN, hiN);
+        }
+        if(colChg!==null){
+          // v5.1 斷行修復：不用硬邊界切字，改「字元連續群組＋最近欄錨點」歸類，
+          // 斷行片段（如 NG(16,SN+阿爾）起點超出舊邊界也能完整保留
+          const loT0=(colDiag!==null)?colDiag-10:colChg-60;
+          const hiT=(colPay!==null)?colPay-2:(loN!==null?loN:colChg+110);
+          const region=chars.filter(c=>c[1]>=loT0 && c[1]<hiT);
+          const runs=[]; let cur=null, prevX=null;
+          for(const [ch,x] of region){
+            if(cur===null || x-prevX>14){ cur={s:"",x0:x,x1:x}; runs.push(cur); }
+            cur.s+=ch; cur.x1=x; prevX=x;
           }
-          continue;
+          const aD=(colDiag!==null)?colDiag+10:null, aT=colChg+20;
+          tb=runs.filter(r=>{
+            if(aD===null) return true;
+            const cx=(r.x0+r.x1)/2;
+            return Math.abs(cx-aT)<=Math.abs(cx-aD);   // 距管路錨點較近才算管路
+          }).map(r=>r.s).join("").trim();
         }
-        // 地址接續行（非行政區片段）
-        if(pending && pending.addr && colAddr!==null && Math.abs(it.x-colAddr)<130 && /^[\u4e00-\u9fff0-9之樓號巷弄段路街區里()（）-]+$/.test(t) && !NAME_SKIP.has(t)){
-          pending.addr += t;
-          continue;
+      }
+      // 姓名（含跨行姓名接續）
+      let justCreated=false;
+      if(nm && nameRe.test(nm) && !NAME_SKIP.has(nm) && !nameReject.test(nm)){
+        if(pending && pending.district===null && pending.addr===null && nameRe.test((pending.name||"")+nm)){
+          pending.name=(pending.name||"")+nm;
+        }else{
+          finalize();
+          justCreated=true;
+          pending={name:nm, zone:curZone, district:null, addr:null, notes:[], last:null, tubes:[]};
+          curBlock=bi;
+          flushOrphans();
         }
-        // 備註
-        if(pending && colNote!==null && it.x >= colNote-18 && !NOTE_SKIP.has(t) && !NOTE_SKIP_PREFIX.some(pf=>t.startsWith(pf))){
-          pending.notes.push(t);
+      }
+      // 地址
+      if(ad){
+        const dm=ad.match(distRe);
+        if(dm){
+          let d=dm[2];
+          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
+          if(dm[1]==="桃園市" || d==="桃園") d="桃園";
+          if(!pending){
+            pending={name:null, zone:curZone, district:null, addr:null, notes:[], last:null, tubes:[]};
+            curBlock=bi;
+            flushOrphans();
+          }
+          const atext=ad.slice(dm.index);
+          if(pending.district===null){ pending.district=d; pending.addr=atext; }
+          else pending.addr=(pending.addr||"")+" / "+atext;
+        }else if(pending && pending.addr && addrContRe.test(ad) && !/^[\d()+－\-/／、★@]+$/.test(ad)){
+          pending.addr+=ad;
+        }
+      }
+      // 備註（跑行歸位：落在下一個個案區塊的先暫存）
+      if(nt && !/^[=_\s]+$/.test(nt)){
+        if(bi>curBlock && bi>=0) orphanOf(bi).notes.push(nt);
+        else if(pending) pending.notes.push(nt);
+      }
+      // 管路（同上）
+      if(tb && !tb.includes("更換管路")){
+        if(bi>curBlock && bi>=0) orphanOf(bi).tubes.push(tb);
+        else if(pending) pending.tubes.push(tb);
+      }
+      // 上次訪視（跳過姓名建立行；限表格左半部）
+      if(pending && !justCreated && !pending.last){
+        const m2=joined.match(/1\d{2}-\d{2}-\d{2}/);
+        if(m2){
+          const xa = sub ? colAddrS : colAddr;
+          if(chars[m2.index][1] < (xa!==null && xa!==undefined ? xa : 300)) pending.last=m2[0];
         }
       }
     }
-    // ★ 不在頁尾 finalize —— 跨頁的個案（姓名在上一頁、地址在下一頁）可正確接續
+    // 不在頁尾 finalize：跨頁個案可接續
   }
   finalize();
   return {org, dateISO, zones, unknowns, filename:file.name};
@@ -483,7 +668,8 @@ async function handleFiles(files){
       const parts=[];
       let mismatch=[];
       for(const [z,info] of Object.entries(r.zones)){
-        data[r.org][r.dateISO][z] = {count:info.count, districts:info.districts, people:info.people};
+        // 解析結果（districts/people）→ 新標籤陣列格式
+        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>({name:d, people: info.people[d]||[]}))};
         const parsed = Object.values(info.people).reduce((s,a)=>s+a.length,0);
         if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
         const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
@@ -517,19 +703,40 @@ function zonesForMonth(org, ym){
   }
   return [...set].sort();
 }
+function hiddenZones(){
+  try{ return new Set(JSON.parse(localStorage.getItem('careone-zonehide-'+curOrg)||'[]')); }catch(e){ return new Set(); }
+}
+function saveHiddenZones(set){
+  try{ localStorage.setItem('careone-zonehide-'+curOrg, JSON.stringify([...set])); }catch(e){}
+}
+function toggleZone(z){
+  const h = hiddenZones();
+  if(h.has(z)) h.delete(z); else h.add(z);
+  saveHiddenZones(h); render();
+}
+function showAllZones(){ saveHiddenZones(new Set()); render(); }
 function render(){
   hideTipNow();
   const [Y,M] = curYM.split("-").map(Number);
   document.getElementById('monthLabel').textContent = `${Y}年${M}月`;
   const days = new Date(Y, M, 0).getDate();
-  const zones = zonesForMonth(curOrg, curYM);
+  const allZones = zonesForMonth(curOrg, curYM);
+  const hid = hiddenZones();
+  const zones = allZones.filter(z=>!hid.has(z));
+  document.getElementById('zoneBar').innerHTML = '<b>顯示區域：</b>' +
+    allZones.map(z=>`<span class="zchip${hid.has(z)?'':' on'}" onclick="toggleZone('${z}')">${z}區</span>`).join('') +
+    `<span class="zchip all" onclick="showAllZones()">全部顯示</span>`;
   const todayISO = new Date().toISOString().slice(0,10);
 
   let html = "<thead><tr><th>日</th><th>週</th>";
-  for(const z of zones) html += `<th>人數</th><th class="zone">${z}區 行政區</th>`;
+  for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${z}區 行政區</th>`;
   html += "</tr></thead><tbody>";
 
-  for(let d=1; d<=days; d++){
+  let f = parseInt(document.getElementById('dayFrom').value)||1;
+  let t = parseInt(document.getElementById('dayTo').value)||days;
+  f = Math.max(1, Math.min(f, days));
+  t = Math.max(f, Math.min(t, days));
+  for(let d=f; d<=t; d++){
     const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const wd = WEEK[new Date(Y, M-1, d).getDay()];
     const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
@@ -537,22 +744,25 @@ function render(){
     html += `<tr class="${wknd}${today}"><td class="day">${d}</td><td class="wd">${wd}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
-      const info = rec[z];
+      const info = rec[z] ? normalizeRec(rec[z]) : null;
       const cnt = info ? info.count : "";
       let chips = "";
-      if(info) info.districts.forEach((name, i)=>{
-        const c = colorOf(curOrg, name);
-        const ppl = info.people && info.people[name] ? info.people[name].length : 0;
+      if(info) info.tags.forEach((tag, i)=>{
+        const c = colorOf(curOrg, tag.name);
+        const ppl = tag.people ? tag.people.length : 0;
         const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
-        const unk = name==="未判定" ? " unknown" : "";
+        const unk = tag.name==="未判定" ? " unknown" : "";
         chips += `<span class="chip${unk}" draggable="true" style="${c?`background:${c};`:""}"
           ondragstart="dragStart(event,'${dateISO}','${z}',${i})" ondragend="dragEnd(event)"
+          ondragover="chipDragOver(event)" ondragleave="chipDragLeave(event)" ondrop="chipDrop(event,'${dateISO}','${z}',${i})"
           onmouseenter="chipEnter(event,'${dateISO}','${z}',${i})" onmouseleave="chipLeave()"
           onclick="chipPin(event,'${dateISO}','${z}',${i})"
-          >${name}${badge}<span class="x" onclick="quickRemove(event,'${dateISO}','${z}',${i})">✕</span></span>`;
+          >${tag.name}${badge}<span class="x" onclick="quickRemove(event,'${dateISO}','${z}',${i})">✕</span></span>`;
       });
       chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
       html += `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`;
+      const nurse = info && info.nurse ? info.nurse : "";
+      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}')" title="點擊輸入護理師">${nurse}</td>`;
       html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
@@ -563,7 +773,7 @@ function render(){
   renderLegend();
 }
 function renderLegend(){
-  let h = `<h3>🎨 ${ORG_NAME[curOrg]}｜鄰近區顏色圖例（拖曳搬區、滑到標籤看名單並可捲動、點標籤釘選、✕ 移除、「＋」新增）</h3>`;
+  let h = `<h3>🎨 ${ORG_NAME[curOrg]}｜鄰近區顏色圖例（拖到空白處＝獨立、拖到標籤上＝合併大群、釘選後勾選拆分、✕ 移除、「＋」新增）</h3>`;
   GROUPS[curOrg].forEach((g,i)=>{
     h += `<div class="row"><div class="sw" style="background:${g.color}"></div><b>${i+1}.</b> ${g.names.join("、")}</div>`;
   });
@@ -577,7 +787,23 @@ function dragStart(ev, dateISO, zone, idx){
   ev.target.classList.add('dragging');
   hideTipNow();
 }
-function dragEnd(ev){ ev.target.classList.remove('dragging'); }
+function dragEnd(ev){
+  ev.target.classList.remove('dragging');
+  document.querySelectorAll('.chip.dropover, td.dists.dropover').forEach(el=>el.classList.remove('dropover'));
+}
+let draggingPerson = false;
+function personDragStart(ev, dateISO, zone, tagIdx, pIdx){
+  ev.stopPropagation();
+  draggingPerson = true;
+  dragInfo = {type:'person', dateISO, zone, tagIdx, pIdx};
+  ev.dataTransfer.effectAllowed = "move";
+  ev.currentTarget.classList.add('dragging');
+}
+function personDragEnd(ev){
+  draggingPerson = false;
+  ev.currentTarget.classList.remove('dragging');
+  scheduleTipHide();
+}
 function dragOver(ev){
   ev.preventDefault();
   ev.dataTransfer.dropEffect = "move";
@@ -590,56 +816,160 @@ function dropChip(ev){
   if(!dragInfo) return;
   const dstDate = ev.currentTarget.dataset.date;
   const dstZone = ev.currentTarget.dataset.zone;
+
+  /* ── 單一個案搬移（從釘選名單拖出）── */
+  if(dragInfo.type==='person'){
+    const {dateISO:srcDate, zone:srcZone, tagIdx, pIdx} = dragInfo;
+    dragInfo = null;
+    if(srcDate===dstDate && srcZone===dstZone) return;
+    const src = getRec(curOrg, srcDate, srcZone);
+    if(!src || !src.tags[tagIdx] || !src.tags[tagIdx].people[pIdx]) return;
+    const tag = src.tags[tagIdx];
+    const person = tag.people.splice(pIdx, 1)[0];
+    src.count = Math.max(0, (src.count||0) - 1);
+    if(tag.people.length===0) src.tags.splice(tagIdx, 1);
+    const dst = ensureCell(curOrg, dstDate, dstZone);
+    let dtag = dst.tags.find(t=>t.name===tag.name);
+    if(!dtag){ dtag = {name:tag.name, people:[]}; dst.tags.push(dtag); }
+    dtag.people.push(person);
+    dst.count = (dst.count||0) + 1;
+    hideTipNow(); saveData(); render();
+    toast(`已將 ${person.name}（${tag.name}）移到 ${dstZone}區`);
+    return;
+  }
+
+  /* ── 整個標籤搬移（同名標籤不合併、保持獨立）── */
   const {dateISO:srcDate, zone:srcZone, idx} = dragInfo;
   dragInfo = null;
   if(srcDate===dstDate && srcZone===dstZone) return;
 
   const src = getRec(curOrg, srcDate, srcZone);
-  if(!src) return;
-  const name = src.districts[idx];
-  const people = (src.people && src.people[name]) ? src.people[name] : [];
-  src.districts.splice(idx,1);
-  if(src.people) delete src.people[name];
-  if(people.length) src.count = Math.max(0, (src.count||0) - people.length);
-  if(!data[curOrg][dstDate]) data[curOrg][dstDate]={};
-  if(!data[curOrg][dstDate][dstZone]) data[curOrg][dstDate][dstZone]={count:0, districts:[], people:{}};
-  const dst = data[curOrg][dstDate][dstZone];
-  if(!dst.districts.includes(name)) dst.districts.push(name);
-  if(people.length){
-    if(!dst.people) dst.people={};
-    dst.people[name] = (dst.people[name]||[]).concat(people);
-    dst.count = (dst.count||0) + people.length;
-  }
+  if(!src || !src.tags[idx]) return;
+  const tag = src.tags.splice(idx, 1)[0];
+  const n = tag.people ? tag.people.length : 0;
+  if(n) src.count = Math.max(0, (src.count||0) - n);
+  const dst = ensureCell(curOrg, dstDate, dstZone);
+  dst.tags.push(tag);
+  if(n) dst.count = (dst.count||0) + n;
   saveData(); render();
-  toast(`已將「${name}」移到 ${dstZone}區${people.length?`（含 ${people.length} 人）`:""}`);
+  toast(`已將「${tag.name}」移到 ${dstZone}區${n?`（含 ${n} 人，獨立標籤）`:""}`);
 }
 
-/* ===== 個案名單浮標視窗（錨定＋可捲動＋可釘選）===== */
+/* ===== 拖到標籤上 → 合併成一大群標籤（拖到空白處則保持獨立）===== */
+function chipDragOver(ev){
+  if(!dragInfo) return;
+  ev.preventDefault(); ev.stopPropagation();
+  ev.dataTransfer.dropEffect = "move";
+  ev.currentTarget.classList.add('dropover');
+}
+function chipDragLeave(ev){ ev.currentTarget.classList.remove('dropover'); }
+function chipDrop(ev, dstDate, dstZone, dstIdx){
+  ev.preventDefault(); ev.stopPropagation();
+  ev.currentTarget.classList.remove('dropover');
+  document.querySelectorAll('td.dists.dropover').forEach(td=>td.classList.remove('dropover'));
+  if(!dragInfo) return;
+  const dst = getRec(curOrg, dstDate, dstZone);
+  if(!dst || !dst.tags[dstIdx]){ dragInfo=null; return; }
+
+  /* 個案拖到標籤上 → 併入該標籤 */
+  if(dragInfo.type==='person'){
+    const {dateISO:sd, zone:sz, tagIdx, pIdx} = dragInfo; dragInfo=null;
+    const src = getRec(curOrg, sd, sz);
+    if(!src || !src.tags[tagIdx] || !src.tags[tagIdx].people[pIdx]) return;
+    const sameCell = (sd===dstDate && sz===dstZone);
+    if(sameCell && tagIdx===dstIdx) return;
+    const stag = src.tags[tagIdx];
+    const person = stag.people.splice(pIdx,1)[0];
+    let dIdx = dstIdx;
+    if(stag.people.length===0){
+      src.tags.splice(tagIdx,1);
+      if(sameCell && tagIdx < dIdx) dIdx--;
+    }
+    if(!sameCell){ src.count=Math.max(0,(src.count||0)-1); dst.count=(dst.count||0)+1; }
+    dst.tags[dIdx].people.push(person);
+    hideTipNow(); saveData(); render();
+    toast(`已將 ${person.name} 併入「${dst.tags[dIdx].name}」`);
+    return;
+  }
+
+  /* 標籤拖到標籤上 → 合併成一大群 */
+  const {dateISO:sd, zone:sz, idx} = dragInfo; dragInfo=null;
+  const src = getRec(curOrg, sd, sz);
+  if(!src || !src.tags[idx]) return;
+  const sameCell = (sd===dstDate && sz===dstZone);
+  if(sameCell && idx===dstIdx) return;
+  const stag = src.tags[idx];
+  const dtag0 = dst.tags[dstIdx];
+  if(stag.name!==dtag0.name && !confirm(`「${stag.name}」與「${dtag0.name}」名稱不同，合併後標籤名為「${dtag0.name}」，確定併成一大群？`)) return;
+  src.tags.splice(idx,1);
+  let dIdx = dstIdx;
+  if(sameCell && idx < dIdx) dIdx--;
+  const dtag = dst.tags[dIdx];
+  const n = stag.people ? stag.people.length : 0;
+  dtag.people = (dtag.people||[]).concat(stag.people||[]);
+  if(!sameCell && n){ src.count=Math.max(0,(src.count||0)-n); dst.count=(dst.count||0)+n; }
+  saveData(); render();
+  toast(`已合併成「${dtag.name}(${dtag.people.length})」大群標籤，釘選後可再勾選拆分`);
+}
+
+/* ===== 個案名單浮標視窗（錨定＋可捲動＋可釘選＋勾選拆分）===== */
 const tipEl = document.getElementById('tip');
 let tipPinned = false;
-let tipKey = null;         // 目前顯示的 "date|zone|idx"
+let tipKey = null;         // 目前顯示的 "date|zone|tagIdx"
 let tipHideTimer = null;
+let tipCtx = null;         // {dateISO, zone, idx} 供拆分使用
+let tipSel = new Set();    // 已勾選的個案索引
 
 function buildTipContent(dateISO, zone, idx){
   const rec = getRec(curOrg, dateISO, zone);
   if(!rec) return false;
-  const name = rec.districts[idx];
-  if(name===undefined) return false;
-  const ppl = (rec.people && rec.people[name]) ? rec.people[name] : [];
-  document.getElementById('tipTitle').textContent = `📍 ${name}（${ppl.length||"—"} 人）｜${dateISO} ${zone}區`;
+  const tag = rec.tags[idx];
+  if(!tag) return false;
+  const ppl = tag.people || [];
+  tipCtx = {dateISO, zone, idx};
+  tipSel = new Set();
+  document.getElementById('tipTitle').textContent = `📍 ${tag.name}（${ppl.length||"—"} 人）｜${dateISO} ${zone}區`;
   let h = "";
   if(ppl.length===0){
     h = `<div class="none">此標籤為手動新增，尚無個案明細</div>`;
   }else{
     ppl.forEach((p,i)=>{
-      h += `<div class="person"><div class="pname">${i+1}. ${p.name}</div>`;
+      h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}</div>`;
+      if(p.last) h += `<div class="plast">🗓 上次訪視 ${p.last}</div>`;
       if(p.addr) h += `<div class="paddr">🏠 ${p.addr}</div>`;
+      if(p.tube) h += `<div class="ptube">🩺 ${p.tube}</div>`;
       if(p.note) h += `<div class="pnote">📝 ${p.note}</div>`;
       h += `</div>`;
     });
   }
   document.getElementById('tipBody').innerHTML = h;
+  const foot = document.getElementById('tipFoot');
+  foot.style.display = ppl.length>=2 ? "block" : "none";
+  const b = document.getElementById('splitBtn');
+  b.disabled = true;
+  b.textContent = "✂ 勾選個案後拆分成小標籤";
   return true;
+}
+function tipToggleSel(i, on){
+  if(on) tipSel.add(i); else tipSel.delete(i);
+  const b = document.getElementById('splitBtn');
+  if(b){
+    b.disabled = tipSel.size===0;
+    b.textContent = tipSel.size ? `✂ 拆分選取的 ${tipSel.size} 人成小標籤` : "✂ 勾選個案後拆分成小標籤";
+  }
+}
+function splitSelected(){
+  if(!tipCtx || tipSel.size===0) return;
+  const rec = getRec(curOrg, tipCtx.dateISO, tipCtx.zone);
+  const tag = rec && rec.tags[tipCtx.idx];
+  if(!tag) return;
+  if(tipSel.size >= tag.people.length){ toast("已全選：整個標籤直接拖曳即可，不需拆分"); return; }
+  const idxs = [...tipSel].sort((a,b)=>a-b);
+  const moved = idxs.map(i=>tag.people[i]);
+  [...idxs].reverse().forEach(i=>tag.people.splice(i,1));
+  rec.tags.splice(tipCtx.idx+1, 0, {name:tag.name, people:moved});
+  hideTipNow(); saveData(); render();
+  toast(`已拆分出「${tag.name}(${moved.length})」小標籤，可直接拖曳搬區`);
 }
 function positionTip(anchorEl){
   const r = anchorEl.getBoundingClientRect();
@@ -649,14 +979,15 @@ function positionTip(anchorEl){
   const spaceBelow = window.innerHeight - r.bottom - 14;
   const spaceAbove = r.top - 14;
   const body = document.querySelector('#tip .tip-body');
+  const footH = document.getElementById('tipFoot').style.display!=="none" ? 46 : 0;
   if(spaceBelow >= 180 || spaceBelow >= spaceAbove){
     tipEl.style.top = (r.bottom + 6) + "px";
     tipEl.style.bottom = "";
-    body.style.maxHeight = Math.max(140, Math.min(460, spaceBelow - 46)) + "px";
+    body.style.maxHeight = Math.max(140, Math.min(460, spaceBelow - 46 - footH)) + "px";
   }else{
     tipEl.style.top = "";
     tipEl.style.bottom = (window.innerHeight - r.top + 6) + "px";
-    body.style.maxHeight = Math.max(140, Math.min(460, spaceAbove - 46)) + "px";
+    body.style.maxHeight = Math.max(140, Math.min(460, spaceAbove - 46 - footH)) + "px";
   }
 }
 function chipEnter(ev, dateISO, zone, idx){
@@ -667,14 +998,14 @@ function chipEnter(ev, dateISO, zone, idx){
   tipKey = key;
   tipEl.style.display = "block";
   tipEl.classList.remove('pinned');
-  document.getElementById('tipHint').textContent = "點標籤可釘選";
+  document.getElementById('tipHint').textContent = "點標籤釘選後，可勾選拆分或拖曳個案列搬區";
   positionTip(ev.currentTarget);
 }
 function chipLeave(){ scheduleTipHide(); }
 function tipHoverIn(){ clearTimeout(tipHideTimer); }   // 滑進視窗 → 不關閉，可捲動
 function tipHoverOut(){ scheduleTipHide(); }
 function scheduleTipHide(){
-  if(tipPinned) return;
+  if(tipPinned || draggingPerson) return;
   clearTimeout(tipHideTimer);
   tipHideTimer = setTimeout(()=>{ tipEl.style.display="none"; tipKey=null; }, 320);
 }
@@ -687,7 +1018,7 @@ function chipPin(ev, dateISO, zone, idx){
   tipPinned = true;
   tipEl.style.display = "block";
   tipEl.classList.add('pinned');
-  document.getElementById('tipHint').textContent = "已釘選｜✕ 或再點標籤關閉";
+  document.getElementById('tipHint').textContent = "已釘選｜勾選個案可拆分小標籤，或拖曳⠿單獨搬移";
   positionTip(ev.currentTarget);
 }
 function hideTipNow(){
@@ -695,6 +1026,8 @@ function hideTipNow(){
   tipEl.style.display = "none";
   tipEl.classList.remove('pinned');
   tipKey = null;
+  tipCtx = null;
+  tipSel = new Set();
   clearTimeout(tipHideTimer);
 }
 function hideTip(){ if(!tipPinned){ tipEl.style.display="none"; tipKey=null; } }
@@ -710,17 +1043,30 @@ function quickRemove(ev, dateISO, zone, idx){
   ev.stopPropagation();
   hideTipNow();
   const rec = getRec(curOrg, dateISO, zone);
-  if(!rec) return;
-  const name = rec.districts[idx];
-  const ppl = (rec.people && rec.people[name]) ? rec.people[name].length : 0;
-  if(ppl && !confirm(`「${name}」含 ${ppl} 筆個案資料，確定移除？（人數不會自動變更）`)) return;
-  rec.districts.splice(idx, 1);
-  if(rec.people) delete rec.people[name];
+  if(!rec || !rec.tags[idx]) return;
+  const tag = rec.tags[idx];
+  const ppl = tag.people ? tag.people.length : 0;
+  if(ppl && !confirm(`「${tag.name}」含 ${ppl} 筆個案資料，確定移除？（人數不會自動變更）`)) return;
+  rec.tags.splice(idx, 1);
   saveData(); render();
-  toast(`已移除 ${name}`);
+  toast(`已移除 ${tag.name}`);
 }
 
 /* ===== 操作 ===== */
+function editNurse(dateISO, zone){
+  hideTipNow();
+  const rec = getRec(curOrg, dateISO, zone);
+  const cur = rec && rec.nurse ? rec.nurse : "";
+  const v = prompt(`${dateISO} ${zone}區 護理師：`, cur);
+  if(v===null) return;
+  ensureCell(curOrg, dateISO, zone).nurse = v.trim();
+  saveData(); render();
+}
+function resetRange(){
+  document.getElementById('dayFrom').value = "";
+  document.getElementById('dayTo').value = "";
+  render();
+}
 function switchOrg(org){
   curOrg = org;
   hideTipNow();
@@ -732,6 +1078,8 @@ function navMonth(dir){
   M += dir;
   if(M===0){M=12;Y--;} if(M===13){M=1;Y++;}
   curYM = `${Y}-${String(M).padStart(2,'0')}`;
+  document.getElementById('dayFrom').value = "";
+  document.getElementById('dayTo').value = "";
   render();
 }
 function clearMonth(){
@@ -745,7 +1093,7 @@ function openModal(dateISO, zone){
   hideTipNow();
   editing = {org:curOrg, dateISO, zone};
   const rec = getRec(curOrg, dateISO, zone);
-  tempDists = rec ? [...rec.districts] : [];
+  tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[]})) : [];
   document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
   document.getElementById('editCount').value = rec ? rec.count : "";
   document.getElementById('customInput').value = "";
@@ -754,34 +1102,46 @@ function openModal(dateISO, zone){
 }
 function renderPicker(){
   const sel = document.getElementById('selectedArea');
-  if(tempDists.length===0){
+  if(tempTags.length===0){
     sel.innerHTML = '<div class="empty">尚未選擇，點下方色塊即可加入</div>';
   }else{
-    sel.innerHTML = tempDists.map((name,i)=>{
-      const c = colorOf(curOrg, name);
-      return `<span class="chip" style="${c?`background:${c};`:""}">${name}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
+    sel.innerHTML = tempTags.map((t,i)=>{
+      const c = colorOf(curOrg, t.name);
+      const n = t.people ? t.people.length : 0;
+      const badge = n ? `<span class="cbadge">${n}</span>` : "";
+      return `<span class="chip" style="${c?`background:${c};`:""}">${t.name}${badge}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
     }).join("");
   }
   const pg = document.getElementById('pickerGroups');
   pg.innerHTML = GROUPS[curOrg].map((g,gi)=>{
     const btns = g.names.map(name=>{
-      const on = tempDists.includes(name) ? " on" : "";
+      const on = tempTags.some(t=>t.name===name) ? " on" : "";
       return `<span class="pick${on}" style="background:${g.color}" onclick="togglePick('${name}')">${name}</span>`;
     }).join("");
     return `<div class="pick-group"><div class="gtitle">第 ${gi+1} 組</div>${btns}</div>`;
   }).join("");
 }
 function togglePick(name){
-  const i = tempDists.indexOf(name);
-  if(i>=0) tempDists.splice(i,1);
-  else tempDists.push(name);
+  const has = tempTags.some(t=>t.name===name);
+  if(has){
+    const withPpl = tempTags.reduce((s,t)=>s+(t.name===name && t.people && t.people.length ? t.people.length : 0), 0);
+    if(withPpl && !confirm(`「${name}」共 ${withPpl} 筆個案資料，取消將移除全部同名標籤，確定？`)) return;
+    tempTags = tempTags.filter(t=>t.name!==name);
+  }else{
+    tempTags.push({name, people:[]});
+  }
   renderPicker();
 }
-function tempRemove(i){ tempDists.splice(i,1); renderPicker(); }
+function tempRemove(i){
+  const t = tempTags[i];
+  const n = t && t.people ? t.people.length : 0;
+  if(n && !confirm(`「${t.name}」含 ${n} 筆個案資料，確定移除？`)) return;
+  tempTags.splice(i,1); renderPicker();
+}
 function addCustom(){
   const v = document.getElementById('customInput').value.trim();
   if(!v) return;
-  if(!tempDists.includes(v)) tempDists.push(v);
+  tempTags.push({name:v, people:[]});
   document.getElementById('customInput').value = "";
   renderPicker();
 }
@@ -790,12 +1150,12 @@ function saveCell(){
   if(!editing) return;
   const cnt = parseInt(document.getElementById('editCount').value)||0;
   if(!data[editing.org][editing.dateISO]) data[editing.org][editing.dateISO]={};
-  const old = data[editing.org][editing.dateISO][editing.zone];
-  const people = {};
-  if(old && old.people){
-    for(const d of tempDists) if(old.people[d]) people[d] = old.people[d];
-  }
-  data[editing.org][editing.dateISO][editing.zone] = {count:cnt, districts:[...tempDists], people};
+  const rec0 = data[editing.org][editing.dateISO][editing.zone];
+  data[editing.org][editing.dateISO][editing.zone] = {
+    count: cnt,
+    tags: tempTags.map(t=>({name:t.name, people:t.people||[]})),
+    nurse: rec0 && rec0.nurse ? rec0.nurse : ""
+  };
   saveData(); closeModal(); render(); toast("已更新");
 }
 function deleteCell(){
@@ -809,24 +1169,25 @@ function deleteCell(){
 function exportCSV(){
   const [Y,M] = curYM.split("-").map(Number);
   const days = new Date(Y, M, 0).getDate();
-  const zones = zonesForMonth(curOrg, curYM);
-  let rows = [["日期","週", ...zones.flatMap(z=>[`${z}區人數`,`${z}區行政區`])]];
+  const hid = hiddenZones();
+  const zones = zonesForMonth(curOrg, curYM).filter(z=>!hid.has(z));
+  let rows = [["日期","週", ...zones.flatMap(z=>[`${z}區人數`,`${z}區護理師`,`${z}區行政區`])]];
   for(let d=1; d<=days; d++){
     const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const wd = WEEK[new Date(Y, M-1, d).getDay()];
     const rec = data[curOrg][dateISO]||{};
     const row=[d, wd];
     for(const z of zones){
-      const info=rec[z];
-      const dd = info ? info.districts.map(n=>{
-        const c = info.people && info.people[n] ? info.people[n].length : 0;
-        return c ? `${n}(${c})` : n;
+      const info = rec[z] ? normalizeRec(rec[z]) : null;
+      const dd = info ? info.tags.map(t=>{
+        const c = t.people ? t.people.length : 0;
+        return c ? `${t.name}(${c})` : t.name;
       }).join("、") : "";
-      row.push(info?info.count:"", dd);
+      row.push(info?info.count:"", info&&info.nurse?info.nurse:"", dd);
     }
     rows.push(row);
   }
-  const csv = "\uFEFF" + rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+  const csv = "﻿" + rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
   a.download = `${ORG_NAME[curOrg]}_${curYM}_行程表.csv`;
