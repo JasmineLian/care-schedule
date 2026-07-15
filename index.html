@@ -43,6 +43,8 @@ h1{font-size:22px; color:var(--brand); margin-bottom:4px;}
 .zchip{padding:4px 13px; border-radius:14px; border:1.5px solid var(--line); cursor:pointer; user-select:none; color:var(--muted); background:#f2f3f7; font-weight:bold;}
 .zchip.on{background:var(--brand); color:#fff; border-color:var(--brand);}
 .zchip.all{border-style:dashed; color:var(--brand2); background:#fff; font-weight:normal;}
+.zchip{cursor:grab;}
+.zchip.dropover{outline:3px dashed #e67e22; outline-offset:1px;}
 .table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; margin-bottom:14px; max-height:calc(100vh - 140px); min-height:280px;}
 table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
 th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
@@ -701,7 +703,35 @@ function zonesForMonth(org, ym){
   for(const [d, zs] of Object.entries(data[org])){
     if(d.startsWith(ym)) Object.keys(zs).forEach(z=>set.add(z));
   }
-  return [...set].sort();
+  const ord = zoneOrder(org);
+  return [...set].sort((a,b)=>{
+    const ia=ord.indexOf(a), ib=ord.indexOf(b);
+    if(ia>=0 && ib>=0) return ia-ib;
+    if(ia>=0) return -1;
+    if(ib>=0) return 1;
+    return a<b?-1:(a>b?1:0);
+  });
+}
+/* ===== 區欄位順序（拖曳 zonebar 晶片換位）===== */
+function zoneOrder(org){
+  try{ return JSON.parse(localStorage.getItem('careone-zoneorder-'+org)||'[]'); }catch(e){ return []; }
+}
+function saveZoneOrder(arr){
+  try{ localStorage.setItem('careone-zoneorder-'+curOrg, JSON.stringify(arr)); }catch(e){}
+}
+let zoneDragName=null;
+function zoneDragStart(ev,z){ zoneDragName=z; ev.dataTransfer.effectAllowed="move"; }
+function zoneDragEnd(){ zoneDragName=null; document.querySelectorAll('.zchip.dropover').forEach(el=>el.classList.remove('dropover')); }
+function zoneDragOver(ev){ if(!zoneDragName) return; ev.preventDefault(); ev.dataTransfer.dropEffect="move"; ev.currentTarget.classList.add('dropover'); }
+function zoneDragLeave(ev){ ev.currentTarget.classList.remove('dropover'); }
+function zoneDrop(ev, target){
+  ev.preventDefault(); ev.currentTarget.classList.remove('dropover');
+  const src=zoneDragName; zoneDragName=null;
+  if(!src || src===target) return;
+  const arr=zonesForMonth(curOrg, curYM).filter(z=>z!==src);
+  arr.splice(arr.indexOf(target), 0, src);
+  saveZoneOrder(arr); render();
+  toast(`已將 ${src}區 移到 ${target}區 前面`);
 }
 function hiddenZones(){
   try{ return new Set(JSON.parse(localStorage.getItem('careone-zonehide-'+curOrg)||'[]')); }catch(e){ return new Set(); }
@@ -724,8 +754,12 @@ function render(){
   const hid = hiddenZones();
   const zones = allZones.filter(z=>!hid.has(z));
   document.getElementById('zoneBar').innerHTML = '<b>顯示區域：</b>' +
-    allZones.map(z=>`<span class="zchip${hid.has(z)?'':' on'}" onclick="toggleZone('${z}')">${z}區</span>`).join('') +
-    `<span class="zchip all" onclick="showAllZones()">全部顯示</span>`;
+    allZones.map(z=>`<span class="zchip${hid.has(z)?'':' on'}" draggable="true"
+      ondragstart="zoneDragStart(event,'${z}')" ondragend="zoneDragEnd()"
+      ondragover="zoneDragOver(event)" ondragleave="zoneDragLeave(event)" ondrop="zoneDrop(event,'${z}')"
+      onclick="toggleZone('${z}')" title="點擊顯示/隱藏，拖曳可換位">${z}區</span>`).join('') +
+    `<span class="zchip all" onclick="showAllZones()">全部顯示</span>
+     <span style="font-size:11px;color:var(--muted);">（拖曳晶片可調整欄位左右順序）</span>`;
   const todayISO = new Date().toISOString().slice(0,10);
 
   let html = "<thead><tr><th>日</th><th>週</th>";
@@ -805,6 +839,7 @@ function personDragEnd(ev){
   scheduleTipHide();
 }
 function dragOver(ev){
+  if(!dragInfo) return;   // 區晶片等其他拖曳不在此處理
   ev.preventDefault();
   ev.dataTransfer.dropEffect = "move";
   ev.currentTarget.classList.add('dropover');
