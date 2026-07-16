@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>居護行程動態表</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --bg:#f5f6fa; --card:#ffffff; --ink:#2d3436; --muted:#8a8f98;
@@ -136,7 +137,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <body>
 <div class="wrap">
   <h1>📋 居護行程動態表</h1>
-  <div class="sub">上傳 PDF 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
+  <div class="sub">上傳 PDF / Excel 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
 
   <div class="tabs">
     <div class="tab active" data-org="ivy" onclick="switchOrg('ivy')">常春藤</div>
@@ -144,9 +145,9 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   </div>
 
   <div class="upload" id="dropzone" onclick="document.getElementById('fileInput').click()">
-    <b>📄 點擊或拖曳 PDF 到這裡上傳</b>（可一次多個檔案）
-    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註</div>
-    <input type="file" id="fileInput" accept=".pdf" multiple>
+    <b>📄 點擊或拖曳 PDF / Excel(.xlsx) 到這裡上傳</b>（可一次多個檔案、可混用）
+    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註｜Excel 依表頭欄位對應、PDF 依格線定位</div>
+    <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls" multiple>
   </div>
 
   <div class="parse-report" id="parseReport"></div>
@@ -410,7 +411,78 @@ function ensureCell(org, dateISO, zone){
   return normalizeRec(data[org][dateISO][zone]);
 }
 
-/* ===== PDF 解析 v5.2：動態欄界分段重組＋錨點歸類（管路斷行）＋區塊歸位（備註/管路跑行）===== */
+/* ===== v6 格線萃取：框線＝填色細矩形（rect+fill），座標乘 CTM，短邊<2.2pt 視為線 ===== */
+function tfMat(m1,m2){
+  return [m1[0]*m2[0]+m1[2]*m2[1], m1[1]*m2[0]+m1[3]*m2[1],
+          m1[0]*m2[2]+m1[2]*m2[3], m1[1]*m2[2]+m1[3]*m2[3],
+          m1[0]*m2[4]+m1[2]*m2[5]+m1[4], m1[1]*m2[4]+m1[3]*m2[5]+m1[5]];
+}
+function tfPt(m,x,y){ return [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]]; }
+async function extractGrid(page){
+  const O=pdfjsLib.OPS;
+  const ol=await page.getOperatorList();
+  const stack=[]; let m=[1,0,0,1,0,0];
+  const Hs=[], Vs=[]; let pend=[];
+  for(let i=0;i<ol.fnArray.length;i++){
+    const fn=ol.fnArray[i], ar=ol.argsArray[i];
+    if(fn===O.save) stack.push(m);
+    else if(fn===O.restore) m=stack.pop()||m;
+    else if(fn===O.transform) m=tfMat(m, ar);
+    else if(fn===O.constructPath){
+      const pops=ar[0], pargs=ar[1]; let k=0;
+      for(const po of pops){
+        if(po===O.rectangle){
+          const p1=tfPt(m,pargs[k],pargs[k+1]), p2=tfPt(m,pargs[k]+pargs[k+2],pargs[k+1]+pargs[k+3]); k+=4;
+          pend.push([Math.min(p1[0],p2[0]),Math.min(p1[1],p2[1]),Math.max(p1[0],p2[0]),Math.max(p1[1],p2[1])]);
+        }
+        else if(po===O.moveTo||po===O.lineTo) k+=2;
+        else if(po===O.curveTo) k+=6;
+        else if(po===O.curveTo2||po===O.curveTo3) k+=4;
+      }
+    }
+    else if(fn===O.fill||fn===O.eoFill||fn===O.fillStroke||fn===O.eoFillStroke){
+      for(const r of pend){
+        const w=r[2]-r[0], h=r[3]-r[1];
+        if(Math.min(w,h)<2.2 && Math.max(w,h)>6){
+          if(w>=h) Hs.push({c:(r[1]+r[3])/2, a:r[0], b:r[2]});
+          else Vs.push({c:(r[0]+r[2])/2, a:r[1], b:r[3]});
+        }
+      }
+      pend=[];
+    }
+    else if(fn===O.stroke||fn===O.closeStroke||fn===O.endPath) pend=[];
+  }
+  if(Hs.length<3 || !Vs.length) return null;
+  // 水平線：y 聚類、累計長度 ≥ 半表寬者為列界（記錄分隔線必為近全寬）
+  const hs=[...Hs].sort((a,b)=>b.c-a.c);
+  const rows=[];
+  for(const s of hs){
+    const last=rows[rows.length-1];
+    if(last && last.y-s.c<2.5){ last.len+=(s.b-s.a); last.y=(last.y+s.c)/2; last.a=Math.min(last.a,s.a); last.b=Math.max(last.b,s.b); }
+    else rows.push({y:s.c, len:s.b-s.a, a:s.a, b:s.b});
+  }
+  const fullW=Math.max(...rows.map(r=>r.b-r.a));
+  const kept=rows.filter(r=>r.len>=fullW*0.5);
+  const rowYs=kept.map(r=>r.y);
+  if(rowYs.length<3) return null;
+  const top=rowYs[0], bot=rowYs[rowYs.length-1], tableH=top-bot;
+  const left=Math.min(...kept.map(r=>r.a)), right=Math.max(...kept.map(r=>r.b));
+  // 垂直線：x 聚類、累計長度 ≥ 35% 表高者為欄界
+  const vs=Vs.filter(s=>s.c>=left-3 && s.c<=right+3 && s.b>bot-3 && s.a<top+3).sort((a,b)=>a.c-b.c);
+  const cols=[];
+  for(const s of vs){
+    const L=Math.min(s.b,top)-Math.max(s.a,bot);
+    if(L<=0) continue;
+    const last=cols[cols.length-1];
+    if(last && s.c-last.x1<2.5){ last.len+=L; last.x1=s.c; }
+    else cols.push({x0:s.c, x1:s.c, len:L});
+  }
+  const colXs=cols.filter(c=>c.len>=tableH*0.35).map(c=>(c.x0+c.x1)/2);
+  if(colXs.length<6) return null;
+  return {rowYs, colXs};
+}
+
+/* ===== PDF 解析 v6：格線定位（文字精確落格）＋ v5.2 文字模式備援 ===== */
 async function parsePDF(file){
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
@@ -455,6 +527,104 @@ async function parsePDF(file){
     s=s.replace(/[0-9A-Za-z().（）\/／+＋★@]+/g,"");
     return s.replace(/^[-－ ]+|[-－ ]+$/g,"");
   }
+  let gridPages=0, textPages=0;
+
+  /* ── v6：以格網把每個文字精確落格，欄/列歸屬不再用座標猜測 ── */
+  function parseGridPage(tc, grid, rowsArr){
+    const {rowYs, colXs} = grid;
+    const nR=rowYs.length-1, nC=colXs.length-1;
+    const dateRe=/1\d{2}-\d{2}-\d{2}/;
+    // 頁層資訊（機構／日期／分區標頭在表格外，沿用文字行偵測）
+    for(const r of rowsArr){
+      const j=r.joined;
+      if(j.includes("careone.com.tw")) continue;
+      if(!org){ if(j.includes("常春藤")) org="ivy"; else if(j.includes("長青樹")) org="tree"; }
+      if(!dateISO){ const m=j.match(/(1\d{2})-(\d{2})-(\d{2})/); if(m) dateISO=`${+m[1]+1911}-${m[2]}-${m[3]}`; }
+      const zm=j.match(/([A-Z]?\d*)區總人數[：:]\s*(\d+)/);
+      if(zm){
+        finalize();
+        let z=zm[1]||"";
+        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
+        curZone=z;
+        ensureZone(z).count=+zm[2];
+      }
+    }
+    if(!curZone) return false;
+    // 文字落格
+    const cells={};
+    for(const it of tc.items){
+      if(!it.str || !it.str.trim()) continue;
+      const x=it.transform[4], y=it.transform[5];
+      if(y>rowYs[0] || y<rowYs[nR] || x<colXs[0]-1 || x>colXs[nC]+1) continue;
+      let bi=-1; for(let i=0;i<nR;i++){ if(y<=rowYs[i] && y>rowYs[i+1]){ bi=i; break; } }
+      if(bi<0) continue;
+      let cj=nC-1; for(let j2=0;j2<nC;j2++){ if(x>=colXs[j2] && x<colXs[j2+1]){ cj=j2; break; } }
+      (cells[bi*100+cj]=cells[bi*100+cj]||[]).push({x,y,s:it.str});
+    }
+    const cellText=(i,j)=>{
+      const a=cells[i*100+j]; if(!a) return "";
+      return a.sort((p,q)=> (Math.abs(q.y-p.y)>2 ? q.y-p.y : p.x-q.x)).map(o=>o.s).join("").trim();
+    };
+    // 表頭列與欄位對應
+    let hRow=-1;
+    for(let i=0;i<nR;i++){
+      let t=""; for(let j2=0;j2<nC;j2++) t+=cellText(i,j2);
+      if(t.includes("姓名") && (t.includes("地址")||t.includes("電話")||t.includes("出生"))){ hRow=i; break; }
+    }
+    if(hRow<0) return false;
+    const hdr=(j2)=> cellText(hRow,j2) + (hRow+1<nR ? cellText(hRow+1,j2) : "");
+    let cSeq=-1,cDate=-1,cLast=-1,cName=-1,cAddr=-1,cTube=-1,cNote=-1;
+    for(let j2=0;j2<nC;j2++){
+      const t=hdr(j2);
+      if(cSeq<0 && t.includes("序")) cSeq=j2;
+      if(cDate<0 && t.includes("訪視日")) cDate=j2;
+      if(cLast<0 && t.includes("上次訪視")) cLast=j2;
+      if(cName<0 && t.includes("姓名")) cName=j2;
+      if(cAddr<0 && t.includes("地址")) cAddr=j2;
+      if(cTube<0 && t.includes("更換管路")) cTube=j2;
+      if(cNote<0 && t.includes("備註") && !t.includes("費用")) cNote=j2;
+    }
+    if(cName<0 || cAddr<0) return false;
+    // 個案起始列：序號為純數字，或訪視日欄含日期
+    const startBs=[];
+    for(let i=hRow+1;i<nR;i++){
+      const sq=cSeq>=0 ? cellText(i,cSeq) : "";
+      const dt=cDate>=0 ? cellText(i,cDate) : "";
+      if(/^\d{1,2}$/.test(sq) || dateRe.test(dt)) startBs.push(i);
+    }
+    if(!startBs.length) return false;
+    // 跨頁殘留：起始列之前的內容附掛前一筆
+    for(let i=hRow+2;i<startBs[0];i++){
+      if(!pending) break;
+      const tb0=cTube>=0?cellText(i,cTube):"", nt0=cNote>=0?cellText(i,cNote):"";
+      if(tb0 && !tb0.includes("更換管路")) pending.tubes.push(tb0);
+      if(nt0 && !/^[=_\s]+$/.test(nt0)) pending.notes.push(nt0);
+    }
+    // 逐筆（最後一筆保持開放，跨頁可接續）
+    for(let s=0;s<startBs.length;s++){
+      finalize();
+      const b0=startBs[s], b1=(s+1<startBs.length ? startBs[s+1] : nR);
+      const col=(j2)=>{ if(j2<0) return ""; let t=""; for(let i=b0;i<b1;i++) t+=cellText(i,j2); return t; };
+      let nm=cleanName(col(cName));
+      if(NAME_SKIP.has(nm) || nameReject.test(nm) || nm.length<2) nm="";
+      const at=col(cAddr);
+      let district=null, addr=null;
+      const dm=at.match(distRe);
+      if(dm){
+        let d=dm[2];
+        if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
+        if(dm[1]==="桃園市" || d==="桃園") d="桃園";
+        district=d; addr=at.slice(dm.index);
+      }
+      let last=null;
+      if(cLast>=0){ const m2=col(cLast).match(dateRe); if(m2) last=m2[0]; }
+      pending={name:nm||null, zone:curZone, district, addr, notes:[], last, tubes:[]};
+      const tb0=col(cTube), nt0=col(cNote);
+      if(tb0 && !tb0.includes("更換管路")) pending.tubes.push(tb0);
+      if(nt0 && !/^[=_\s]+$/.test(nt0)) pending.notes.push(nt0);
+    }
+    return true;
+  }
 
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p);
@@ -478,6 +648,11 @@ async function parsePDF(file){
       if(!rcs.length) continue;
       rowsArr.push({y:yy, chars:rcs, joined:rcs.map(c=>c[0]).join("")});
     }
+    // ── v6：優先用格線解析本頁；成功即跳過 v5.2 文字模式 ──
+    let grid=null;
+    try{ grid=await extractGrid(page); }catch(e){}
+    if(grid && parseGridPage(tc, grid, rowsArr)){ gridPages++; continue; }
+    textPages++;
     const startRe=/^\d{1,2}1\d{2}-\d{2}-\d{2}/;
     const starts=[];
     let lastPlusY=null;
@@ -651,7 +826,139 @@ async function parsePDF(file){
     // 不在頁尾 finalize：跨頁個案可接續
   }
   finalize();
-  return {org, dateISO, zones, unknowns, filename:file.name};
+  return {org, dateISO, zones, unknowns, filename:file.name, gridPages, textPages};
+}
+
+/* ===== Excel 解析（SheetJS）：結構化來源 =====
+   實測結構（預約訪視表-0721/0722.xlsx）：單一工作表，各 PDF 頁區塊垂直堆疊、大量合併儲存格；
+   頁首列（護理所名＋預約訪視表）→ 分區列（某格「A區總人數：13」）→ 雙列表頭 → 每筆個案 2 列
+   （主列＝序號/訪視日/姓名/電話/診斷/更換管路/預計收費/備註；「✚」列＝上次訪視/地址）。
+   新案副表表頭含「聯絡人」，電話/地址欄位置不同、無上次訪視。
+   欄位對應完全依「表頭文字」動態決定（找到表頭列後以關鍵字定位各欄索引），不用固定索引或座標猜測。
+   輸出與 parsePDF 相同的 zones 結構 {zone:{count,districts,people}}，走同一條資料管線。 */
+async function parseExcel(file){
+  if(typeof XLSX === "undefined") throw new Error("SheetJS 未載入（請確認網路可連 cdnjs）");
+  const wb = XLSX.read(await file.arrayBuffer(), {type:"array"});
+  let org=null, dateISO=null, curZone=null, cols=null, pending=null;
+  const zones={}; const unknowns=[]; const dateTally={};
+  let mainHdrs=0, subHdrs=0;
+  const distRe = new RegExp("(台北市|新北市|基隆市|桃園市)?(" + DISTRICTS.join("|") + ")區");
+  const dateRe = /1\d{2}-\d{2}-\d{2}/;
+  const nameReject = /姓名|刷卡|順序|身分|收費|日期|實際|訪視|電話|地址|備註|診斷|聯絡|申報|管路|預計|說明|費用|序號|間隔|次數/;
+  const cellS = v => String(v==null?"":v).trim();
+  const tidy = s => String(s||"").replace(/\s*=\s*_{3,}/g,"").replace(/_{3,}/g,"").replace(/\s+/g," ").trim();
+  function cleanName(s){
+    s=s.replace(/1\d{2}-\d{2}-\d{2}/g,"");
+    s=s.replace(/[0-9A-Za-z().（）\/／+＋★@]+/g,"");
+    return s.replace(/\s+/g,"").replace(/^[-－ ]+|[-－ ]+$/g,"");
+  }
+  function ensureZone(z){ if(!zones[z]) zones[z]={count:0,districts:[],people:{}}; return zones[z]; }
+  function finalize(){
+    if(pending && pending.zone){
+      let d=pending.district;
+      if(!d){
+        const blob=(pending.name||"")+" "+(pending.rawAddr||"")+" "+(pending.note||"");
+        for(const [kw,alias] of INSTITUTIONS){ if(blob.includes(kw)){ d=alias; break; } }
+      }
+      if(!d){ d="未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
+      const z=ensureZone(pending.zone);
+      if(!z.districts.includes(d)) z.districts.push(d);
+      if(!z.people[d]) z.people[d]=[];
+      z.people[d].push({
+        name: pending.name||"（未識別）",
+        addr: pending.addr||pending.rawAddr||"",
+        last: pending.last||"",
+        tube: tidy(pending.tube),
+        note: tidy(pending.note)
+      });
+    }
+    pending=null;
+  }
+  for(const sn of wb.SheetNames){
+    const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, defval:"", raw:false});
+    curZone=null; cols=null;
+    for(let r=0; r<sheetRows.length; r++){
+      const row=(sheetRows[r]||[]).map(cellS);
+      const joined=row.join(" ");
+      if(!joined.trim()) continue;
+      if(!org){ if(joined.includes("常春藤")) org="ivy"; else if(joined.includes("長青樹")) org="tree"; }
+      // 頁首雜訊列（護理所名／VPN 清單／方鼎掛號…都在這幾格）
+      if(joined.includes("預約訪視表") || joined.includes("careone.com.tw")) continue;
+      // 分區標頭：某一格為「X區總人數：N」
+      let zm=null;
+      for(const c of row){ const m=c.match(/^([A-Z]*\d*)區總人數[：:]\s*(\d+)$/); if(m){ zm=m; break; } }
+      if(zm){
+        finalize();
+        let z=zm[1]||"";
+        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
+        curZone=z;
+        ensureZone(z).count=+zm[2];
+        continue;
+      }
+      // 表頭列：含「姓名」與「訪視日」→ 依表頭文字建立欄位對應（雙列表頭：下一列有 地址/身分/出生日期…）
+      const flat=row.map(c=>c.replace(/\s+/g,""));
+      if(flat.some(c=>c.includes("姓名")) && flat.some(c=>c.includes("訪視日"))){
+        const h2=((sheetRows[r+1])||[]).map(v=>cellS(v).replace(/\s+/g,""));
+        const fc=(arr,kw)=>arr.findIndex(c=>c.includes(kw));
+        cols={
+          seq:  fc(flat,"序"),
+          date: fc(flat,"訪視日"),
+          last: fc(flat,"上次訪視"),
+          name: fc(flat,"姓名"),
+          tube: fc(flat,"更換管路"),
+          note: fc(flat,"備註"),
+          addr: fc(h2,"地址")>=0 ? fc(h2,"地址") : fc(flat,"電話")
+        };
+        if(flat.some(c=>c.includes("聯絡人"))) subHdrs++; else mainHdrs++;
+        // 第二列表頭併入後跳過
+        if(h2.some(c=>/地址|身分|出生日期|家字號|訪視次數/.test(c))) r++;
+        continue;
+      }
+      if(!cols || !curZone) continue;
+      const seqv = cols.seq>=0 ? row[cols.seq] : "";
+      if(/^\d{1,3}$/.test(seqv)){
+        // ── 個案主列 ──
+        finalize();
+        let nm=cleanName(cols.name>=0 ? row[cols.name] : "");
+        if(NAME_SKIP.has(nm) || nameReject.test(nm) || nm.length<2) nm="";
+        if(cols.date>=0){ const dm2=row[cols.date].match(dateRe); if(dm2) dateTally[dm2[0]]=(dateTally[dm2[0]]||0)+1; }
+        pending={
+          zone:curZone, name:nm||null, district:null, addr:null, rawAddr:null, last:null,
+          tube: cols.tube>=0 ? row[cols.tube] : "",
+          note: cols.note>=0 ? row[cols.note] : ""
+        };
+        continue;
+      }
+      // ── 接續列（「✚」列：上次訪視、地址；其餘跨列備註/管路併入）──
+      if(!pending) continue;
+      if(cols.last>=0 && !pending.last && row[cols.last]){
+        const m2=row[cols.last].match(dateRe); if(m2) pending.last=m2[0];
+      }
+      if(cols.addr>=0 && row[cols.addr]){
+        const at=row[cols.addr];
+        const dm=at.match(distRe);
+        if(dm){
+          let d=dm[2];
+          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
+          if(dm[1]==="桃園市" || d==="桃園") d="桃園";
+          if(pending.district===null){ pending.district=d; pending.addr=at.slice(dm.index); }
+          else pending.addr=(pending.addr||"")+" / "+at.slice(dm.index);
+        }else if(!pending.rawAddr && !dateRe.test(at) && /[路街巷弄號段村里鄰]/.test(at)){
+          pending.rawAddr=at;   // 沒有行政區關鍵字的地址（機構等），保留供 INSTITUTIONS 判定與顯示
+        }
+      }
+      if(cols.tube>=0 && row[cols.tube] && !row[cols.tube].includes("更換管路") && !/^[=_\s✚+]+$/.test(row[cols.tube]))
+        pending.tube=(pending.tube?pending.tube+" ":"")+row[cols.tube];
+      if(cols.note>=0 && row[cols.note] && !/^[=_\s✚+]+$/.test(row[cols.note]))
+        pending.note=(pending.note?pending.note+" ":"")+row[cols.note];
+    }
+    finalize();
+  }
+  // 訪視日期：取個案「訪視日」欄出現最多次者（實測整檔一致；檔名日期可能與內容差一天，以內容為準）
+  let best=null, bn=0;
+  for(const [k,v] of Object.entries(dateTally)) if(v>bn){ bn=v; best=k; }
+  if(best){ const m=best.match(/(1\d{2})-(\d{2})-(\d{2})/); if(m) dateISO=`${+m[1]+1911}-${m[2]}-${m[3]}`; }
+  return {org, dateISO, zones, unknowns, filename:file.name, src:"Excel", mainHdrs, subHdrs};
 }
 
 async function handleFiles(files){
@@ -659,11 +966,15 @@ async function handleFiles(files){
   const msgs=[];
   let ok=0;
   for(const f of files){
-    if(!f.name.toLowerCase().endsWith('.pdf')){ msgs.push(`⚠ ${f.name}：非 PDF，略過`); continue; }
+    const ext=(f.name.toLowerCase().match(/\.([a-z0-9]+)$/)||[])[1]||"";
+    let src="";
     try{
-      const r = await parsePDF(f);
+      let r;
+      if(ext==="pdf"){ src="PDF"; r=await parsePDF(f); }
+      else if(ext==="xlsx"||ext==="xls"){ src="Excel"; r=await parseExcel(f); }
+      else { msgs.push(`⚠ ${f.name}：非 PDF / Excel(.xlsx)，略過`); continue; }
       if(!r.org || !r.dateISO || Object.keys(r.zones).length===0){
-        msgs.push(`⚠ ${f.name}：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
+        msgs.push(`⚠ ${f.name}【來源：${src}】：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
         continue;
       }
       if(!data[r.org][r.dateISO]) data[r.org][r.dateISO]={};
@@ -677,7 +988,9 @@ async function handleFiles(files){
         const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
         parts.push(`${z}區${info.count}人（${dd||"—"}）`);
       }
-      let line = `✅ ${f.name} → ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
+      let line = `✅ ${f.name}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
+      if(src==="PDF") line += `｜格線解析 ${r.gridPages} 頁${r.textPages?`、文字模式 ${r.textPages} 頁`:""}`;
+      else line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
       if(r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
@@ -685,7 +998,7 @@ async function handleFiles(files){
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
     }catch(e){
-      msgs.push(`❌ ${f.name}：解析錯誤 ${e.message}`);
+      msgs.push(`❌ ${f.name}${src?`【來源：${src}】`:""}：解析錯誤 ${e.message}`);
     }
   }
   report.innerHTML = msgs.join("<br>");
