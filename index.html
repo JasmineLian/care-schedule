@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>居護行程動態表</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
@@ -137,7 +136,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <body>
 <div class="wrap">
   <h1>📋 居護行程動態表</h1>
-  <div class="sub">上傳 PDF / Excel 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
+  <div class="sub">上傳 Excel 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
 
   <div class="tabs">
     <div class="tab active" data-org="ivy" onclick="switchOrg('ivy')">常春藤</div>
@@ -145,9 +144,9 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   </div>
 
   <div class="upload" id="dropzone" onclick="document.getElementById('fileInput').click()">
-    <b>📄 點擊或拖曳 PDF / Excel(.xlsx) 到這裡上傳</b>（可一次多個檔案、可混用）
-    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註｜Excel 依表頭欄位對應、PDF 依格線定位</div>
-    <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls" multiple>
+    <b>📄 點擊或拖曳 Excel(.xlsx) 到這裡上傳</b>（可一次多個檔案）
+    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註｜依表頭欄位對應解析</div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" multiple>
   </div>
 
   <div class="parse-report" id="parseReport"></div>
@@ -218,8 +217,6 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <div id="toast"></div>
 
 <script>
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
 /* ===== 設定 ===== */
 const GROUPS = {
   ivy: [
@@ -265,7 +262,7 @@ let dragInfo = null;
 /* ===== 共用同步設定 =====
    ★ 部署到 GitHub 時：把下面引號內換成你的 Google Apps Script「網頁應用程式」網址
    （做法見「部署教學.md」）。留空 = 資料只存在本機瀏覽器。 */
-const SYNC_URL = "";
+const SYNC_URL = "https://script.google.com/macros/s/AKfycby4uDv_JrY6_e0AqRzuRIF8YZLHdc0KlxvMY0EvTOBlWpE5hZxdCS_ZvtdlEZdpAKlB/exec";
 
 const hasRemote = SYNC_URL.startsWith("https://script.google.com/");
 let userName = "";
@@ -411,423 +408,7 @@ function ensureCell(org, dateISO, zone){
   return normalizeRec(data[org][dateISO][zone]);
 }
 
-/* ===== v6 格線萃取：框線＝填色細矩形（rect+fill），座標乘 CTM，短邊<2.2pt 視為線 ===== */
-function tfMat(m1,m2){
-  return [m1[0]*m2[0]+m1[2]*m2[1], m1[1]*m2[0]+m1[3]*m2[1],
-          m1[0]*m2[2]+m1[2]*m2[3], m1[1]*m2[2]+m1[3]*m2[3],
-          m1[0]*m2[4]+m1[2]*m2[5]+m1[4], m1[1]*m2[4]+m1[3]*m2[5]+m1[5]];
-}
-function tfPt(m,x,y){ return [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]]; }
-async function extractGrid(page){
-  const O=pdfjsLib.OPS;
-  const ol=await page.getOperatorList();
-  const stack=[]; let m=[1,0,0,1,0,0];
-  const Hs=[], Vs=[]; let pend=[];
-  for(let i=0;i<ol.fnArray.length;i++){
-    const fn=ol.fnArray[i], ar=ol.argsArray[i];
-    if(fn===O.save) stack.push(m);
-    else if(fn===O.restore) m=stack.pop()||m;
-    else if(fn===O.transform) m=tfMat(m, ar);
-    else if(fn===O.constructPath){
-      const pops=ar[0], pargs=ar[1]; let k=0;
-      for(const po of pops){
-        if(po===O.rectangle){
-          const p1=tfPt(m,pargs[k],pargs[k+1]), p2=tfPt(m,pargs[k]+pargs[k+2],pargs[k+1]+pargs[k+3]); k+=4;
-          pend.push([Math.min(p1[0],p2[0]),Math.min(p1[1],p2[1]),Math.max(p1[0],p2[0]),Math.max(p1[1],p2[1])]);
-        }
-        else if(po===O.moveTo||po===O.lineTo) k+=2;
-        else if(po===O.curveTo) k+=6;
-        else if(po===O.curveTo2||po===O.curveTo3) k+=4;
-      }
-    }
-    else if(fn===O.fill||fn===O.eoFill||fn===O.fillStroke||fn===O.eoFillStroke){
-      for(const r of pend){
-        const w=r[2]-r[0], h=r[3]-r[1];
-        if(Math.min(w,h)<2.2 && Math.max(w,h)>6){
-          if(w>=h) Hs.push({c:(r[1]+r[3])/2, a:r[0], b:r[2]});
-          else Vs.push({c:(r[0]+r[2])/2, a:r[1], b:r[3]});
-        }
-      }
-      pend=[];
-    }
-    else if(fn===O.stroke||fn===O.closeStroke||fn===O.endPath) pend=[];
-  }
-  if(Hs.length<3 || !Vs.length) return null;
-  // 水平線：y 聚類、累計長度 ≥ 半表寬者為列界（記錄分隔線必為近全寬）
-  const hs=[...Hs].sort((a,b)=>b.c-a.c);
-  const rows=[];
-  for(const s of hs){
-    const last=rows[rows.length-1];
-    if(last && last.y-s.c<2.5){ last.len+=(s.b-s.a); last.y=(last.y+s.c)/2; last.a=Math.min(last.a,s.a); last.b=Math.max(last.b,s.b); }
-    else rows.push({y:s.c, len:s.b-s.a, a:s.a, b:s.b});
-  }
-  const fullW=Math.max(...rows.map(r=>r.b-r.a));
-  const kept=rows.filter(r=>r.len>=fullW*0.5);
-  const rowYs=kept.map(r=>r.y);
-  if(rowYs.length<3) return null;
-  const top=rowYs[0], bot=rowYs[rowYs.length-1], tableH=top-bot;
-  const left=Math.min(...kept.map(r=>r.a)), right=Math.max(...kept.map(r=>r.b));
-  // 垂直線：x 聚類、累計長度 ≥ 35% 表高者為欄界
-  const vs=Vs.filter(s=>s.c>=left-3 && s.c<=right+3 && s.b>bot-3 && s.a<top+3).sort((a,b)=>a.c-b.c);
-  const cols=[];
-  for(const s of vs){
-    const L=Math.min(s.b,top)-Math.max(s.a,bot);
-    if(L<=0) continue;
-    const last=cols[cols.length-1];
-    if(last && s.c-last.x1<2.5){ last.len+=L; last.x1=s.c; }
-    else cols.push({x0:s.c, x1:s.c, len:L});
-  }
-  const colXs=cols.filter(c=>c.len>=tableH*0.35).map(c=>(c.x0+c.x1)/2);
-  if(colXs.length<6) return null;
-  return {rowYs, colXs};
-}
 
-/* ===== PDF 解析 v6：格線定位（文字精確落格）＋ v5.2 文字模式備援 ===== */
-async function parsePDF(file){
-  const buf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
-  let org=null, dateISO=null, curZone=null;
-  let colName=null,colAddr=null,colNote=null,colDiag=null,colPay=null,colFee=null;
-  let sub=false, colNameS=null, colAddrS=null, colChgS=null;
-  let colChg=null;
-  let pending=null;
-  const zones={}; const unknowns=[];
-  const distRe = new RegExp("(台北市|新北市|基隆市|桃園市)?(" + DISTRICTS.join("|") + ")區");
-  const nameRe = /^[一-鿿]{2,7}([-－][一-鿿]{1,4})?$/;
-  const nameReject = /姓名|刷卡|順序|身分|收費|日期|實際|訪視|電話|地址|備註|診斷|聯絡|申報|管路|預計|說明|費用|序號|間隔|次數/;
-  const addrContRe = /^[一-鿿0-9之樓號巷弄段路街區里鄰()（）Ff/／-]+$/;
-
-  function ensureZone(z){ if(!zones[z]) zones[z]={count:0,districts:[],people:{}}; return zones[z]; }
-  function finalize(){
-    if(pending && pending.zone){
-      let d = pending.district;
-      if(!d){
-        const blob=(pending.name||"")+" "+pending.notes.join(" ");
-        for(const [kw,alias] of INSTITUTIONS){ if(blob.includes(kw)){ d=alias; break; } }
-      }
-      if(!d){ d="未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
-      const z=ensureZone(pending.zone);
-      if(!z.districts.includes(d)) z.districts.push(d);
-      if(!z.people[d]) z.people[d]=[];
-      const note = pending.notes.join(" ").replace(/\s*=\s*_{3,}/g,"").replace(/\s+/g," ").trim();
-      // 括號感知黏合：斷行片段若括號未閉合，直接相連不加空格（NG(16,SN+阿爾 / 傑) → NG(16,SN+阿爾傑)）
-      let tube = "";
-      for(const t of (pending.tubes||[])){
-        if(!tube){ tube = t; continue; }
-        const open = (tube.match(/[(（]/g)||[]).length, close = (tube.match(/[)）]/g)||[]).length;
-        tube += (open > close ? "" : " ") + t;
-      }
-      tube = tube.replace(/(?:\d{2,4}|0)\s*[\/+]\s*\d{2,4}(?:\+\d{2,4})?/g," ").replace(/\s+/g," ").trim().replace(/^[\/+ ]+|[\/+ ]+$/g,"");
-      z.people[d].push({name:pending.name||"（未識別）", addr:pending.addr||"", last:pending.last||"", tube, note});
-    }
-    pending=null;
-  }
-  function cleanName(s){
-    s=s.replace(/1\d{2}-\d{2}-\d{2}/g,"");
-    s=s.replace(/[0-9A-Za-z().（）\/／+＋★@]+/g,"");
-    return s.replace(/^[-－ ]+|[-－ ]+$/g,"");
-  }
-  let gridPages=0, textPages=0;
-
-  /* ── v6：以格網把每個文字精確落格，欄/列歸屬不再用座標猜測 ── */
-  function parseGridPage(tc, grid, rowsArr){
-    const {rowYs, colXs} = grid;
-    const nR=rowYs.length-1, nC=colXs.length-1;
-    const dateRe=/1\d{2}-\d{2}-\d{2}/;
-    // 頁層資訊（機構／日期／分區標頭在表格外，沿用文字行偵測）
-    for(const r of rowsArr){
-      const j=r.joined;
-      if(j.includes("careone.com.tw")) continue;
-      if(!org){ if(j.includes("常春藤")) org="ivy"; else if(j.includes("長青樹")) org="tree"; }
-      if(!dateISO){ const m=j.match(/(1\d{2})-(\d{2})-(\d{2})/); if(m) dateISO=`${+m[1]+1911}-${m[2]}-${m[3]}`; }
-      const zm=j.match(/([A-Z]?\d*)區總人數[：:]\s*(\d+)/);
-      if(zm){
-        finalize();
-        let z=zm[1]||"";
-        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
-        curZone=z;
-        ensureZone(z).count=+zm[2];
-      }
-    }
-    if(!curZone) return false;
-    // 文字落格
-    const cells={};
-    for(const it of tc.items){
-      if(!it.str || !it.str.trim()) continue;
-      const x=it.transform[4], y=it.transform[5];
-      if(y>rowYs[0] || y<rowYs[nR] || x<colXs[0]-1 || x>colXs[nC]+1) continue;
-      let bi=-1; for(let i=0;i<nR;i++){ if(y<=rowYs[i] && y>rowYs[i+1]){ bi=i; break; } }
-      if(bi<0) continue;
-      let cj=nC-1; for(let j2=0;j2<nC;j2++){ if(x>=colXs[j2] && x<colXs[j2+1]){ cj=j2; break; } }
-      (cells[bi*100+cj]=cells[bi*100+cj]||[]).push({x,y,s:it.str});
-    }
-    const cellText=(i,j)=>{
-      const a=cells[i*100+j]; if(!a) return "";
-      return a.sort((p,q)=> (Math.abs(q.y-p.y)>2 ? q.y-p.y : p.x-q.x)).map(o=>o.s).join("").trim();
-    };
-    // 表頭列與欄位對應
-    let hRow=-1;
-    for(let i=0;i<nR;i++){
-      let t=""; for(let j2=0;j2<nC;j2++) t+=cellText(i,j2);
-      if(t.includes("姓名") && (t.includes("地址")||t.includes("電話")||t.includes("出生"))){ hRow=i; break; }
-    }
-    if(hRow<0) return false;
-    const hdr=(j2)=> cellText(hRow,j2) + (hRow+1<nR ? cellText(hRow+1,j2) : "");
-    let cSeq=-1,cDate=-1,cLast=-1,cName=-1,cAddr=-1,cTube=-1,cNote=-1;
-    for(let j2=0;j2<nC;j2++){
-      const t=hdr(j2);
-      if(cSeq<0 && t.includes("序")) cSeq=j2;
-      if(cDate<0 && t.includes("訪視日")) cDate=j2;
-      if(cLast<0 && t.includes("上次訪視")) cLast=j2;
-      if(cName<0 && t.includes("姓名")) cName=j2;
-      if(cAddr<0 && t.includes("地址")) cAddr=j2;
-      if(cTube<0 && t.includes("更換管路")) cTube=j2;
-      if(cNote<0 && t.includes("備註") && !t.includes("費用")) cNote=j2;
-    }
-    if(cName<0 || cAddr<0) return false;
-    // 個案起始列：序號為純數字，或訪視日欄含日期
-    const startBs=[];
-    for(let i=hRow+1;i<nR;i++){
-      const sq=cSeq>=0 ? cellText(i,cSeq) : "";
-      const dt=cDate>=0 ? cellText(i,cDate) : "";
-      if(/^\d{1,2}$/.test(sq) || dateRe.test(dt)) startBs.push(i);
-    }
-    if(!startBs.length) return false;
-    // 跨頁殘留：起始列之前的內容附掛前一筆
-    for(let i=hRow+2;i<startBs[0];i++){
-      if(!pending) break;
-      const tb0=cTube>=0?cellText(i,cTube):"", nt0=cNote>=0?cellText(i,cNote):"";
-      if(tb0 && !tb0.includes("更換管路")) pending.tubes.push(tb0);
-      if(nt0 && !/^[=_\s]+$/.test(nt0)) pending.notes.push(nt0);
-    }
-    // 逐筆（最後一筆保持開放，跨頁可接續）
-    for(let s=0;s<startBs.length;s++){
-      finalize();
-      const b0=startBs[s], b1=(s+1<startBs.length ? startBs[s+1] : nR);
-      const col=(j2)=>{ if(j2<0) return ""; let t=""; for(let i=b0;i<b1;i++) t+=cellText(i,j2); return t; };
-      let nm=cleanName(col(cName));
-      if(NAME_SKIP.has(nm) || nameReject.test(nm) || nm.length<2) nm="";
-      const at=col(cAddr);
-      let district=null, addr=null;
-      const dm=at.match(distRe);
-      if(dm){
-        let d=dm[2];
-        if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
-        if(dm[1]==="桃園市" || d==="桃園") d="桃園";
-        district=d; addr=at.slice(dm.index);
-      }
-      let last=null;
-      if(cLast>=0){ const m2=col(cLast).match(dateRe); if(m2) last=m2[0]; }
-      pending={name:nm||null, zone:curZone, district, addr, notes:[], last, tubes:[]};
-      const tb0=col(cTube), nt0=col(cNote);
-      if(tb0 && !tb0.includes("更換管路")) pending.tubes.push(tb0);
-      if(nt0 && !/^[=_\s]+$/.test(nt0)) pending.notes.push(nt0);
-    }
-    return true;
-  }
-
-  for(let p=1;p<=pdf.numPages;p++){
-    const page=await pdf.getPage(p);
-    const tc=await page.getTextContent();
-    const lines={};
-    for(const it of tc.items){
-      if(!it.str || !it.str.trim()) continue;
-      const y=Math.round(it.transform[5]/3)*3;
-      (lines[y]=lines[y]||[]).push({s:it.str, x:it.transform[4]});
-    }
-    const ys=Object.keys(lines).map(Number).sort((a,b)=>b-a);
-    // ── v5.2 跑行歸位：多行儲存格（備註/管路）垂直置中，第一行 y 會高於姓名列，
-    //    逐行掃描會誤歸給上一位。先找「序號+訪視日」個案起始列與「✚」第二列，
-    //    用（上一個✚ + 起始列）/2 當區塊上邊界；備註/管路若落在下一個個案的
-    //    區塊就先暫存（orphans），等該個案建立後再併入 ──
-    const rowsArr=[];
-    for(const yy of ys){
-      const items=lines[yy].sort((a,b)=>a.x-b.x);
-      const rcs=[];
-      for(const it of items){ for(const ch of it.s){ if(ch.trim()) rcs.push([ch,it.x]); } }
-      if(!rcs.length) continue;
-      rowsArr.push({y:yy, chars:rcs, joined:rcs.map(c=>c[0]).join("")});
-    }
-    // ── v6：優先用格線解析本頁；成功即跳過 v5.2 文字模式 ──
-    let grid=null;
-    try{ grid=await extractGrid(page); }catch(e){}
-    if(grid && parseGridPage(tc, grid, rowsArr)){ gridPages++; continue; }
-    textPages++;
-    const startRe=/^\d{1,2}1\d{2}-\d{2}-\d{2}/;
-    const starts=[];
-    let lastPlusY=null;
-    for(const r of rowsArr){
-      if(r.joined[0]==="✚" || r.joined[0]==="+"){ lastPlusY=r.y; continue; }
-      if(startRe.test(r.joined)) starts.push({y:r.y, top: lastPlusY!==null ? (lastPlusY + r.y)/2 : r.y+14});
-    }
-    const blockIdxOf=(y)=>{ let b=-1; for(let i=0;i<starts.length;i++){ if(y<=starts[i].top) b=i; else break; } return b; };
-    const orphans={};
-    let curBlock=-1;
-    const orphanOf=(b)=>orphans[b]||(orphans[b]={notes:[],tubes:[]});
-    const flushOrphans=()=>{ const o=orphans[curBlock]; if(o && pending){ pending.notes.push(...o.notes); pending.tubes.push(...o.tubes); delete orphans[curBlock]; } };
-    for(const rowL of rowsArr){
-      const chars=rowL.chars, joined=rowL.joined;
-      const bi=blockIdxOf(rowL.y);
-      if(joined.includes("careone.com.tw") || /^\d{4}\/\d{1,2}\/\d{1,2}/.test(joined)) continue;
-      if(joined.includes("預約訪視表") && joined.length<=30) continue;
-      if(!org){
-        if(joined.includes("常春藤")) org="ivy";
-        else if(joined.includes("長青樹")) org="tree";
-      }
-      if(joined.includes("護理所")) continue;
-      if(!dateISO){
-        const m=joined.match(/(1\d{2})-(\d{2})-(\d{2})/);
-        if(m) dateISO=`${+m[1]+1911}-${m[2]}-${m[3]}`;
-      }
-      const kwx=(kw)=>{ const i=joined.indexOf(kw); return i>=0 ? chars[i][1] : null; };
-      // 分區標頭（P5 無字母 → 其他）
-      const zm=joined.match(/([A-Z]?\d*)區總人數[：:]\s*(\d+)/);
-      if(zm){
-        finalize();
-        let z=zm[1]||"";
-        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
-        curZone=z;
-        ensureZone(z).count=+zm[2];
-        continue;
-      }
-      // 頁首雜訊
-      if(/方鼎掛號|申報核對|預約訪視：|醫囑單|登入總表|護理紀錄|身體評估單|^舊案|社會資源|^工作人員|^部分負擔|^小計|^傷口=|^移除=/.test(joined)) continue;
-      // 副表表頭（新案：含「聯絡人」）
-      if(joined.includes("聯絡人") && joined.includes("姓名")){
-        sub=true;
-        let v=kwx("姓名");   if(v!==null) colNameS=v;
-        v=kwx("更換管路");   if(v!==null) colChgS=v;
-        continue;
-      }
-      if(sub && joined.includes("身分") && joined.includes("地址") && joined.length<=14){
-        const v=kwx("地址"); if(v!==null) colAddrS=v;
-        continue;
-      }
-      // 主表表頭（強標記）
-      const isHdr = joined.includes("更換管路") || joined.includes("家字號")
-        || (joined.includes("姓名") && (joined.includes("刷卡")||joined.includes("身分證")))
-        || (joined.includes("身分") && joined.includes("地址") && joined.includes("說明"))
-        || (joined.includes("備註") && ["診斷","預計","收費"].some(k=>joined.includes(k)) && !joined.includes("★") && !joined.includes("@"))
-        || (joined.includes("預計") && joined.includes("費用") && joined.length<=20);
-      if(isHdr){
-        if(joined.includes("家字號")||joined.includes("身分證")) sub=false;
-        let v=kwx("姓名"); if(v!==null) colName=v;
-        v=kwx("電話");
-        if(v!==null) colAddr=v; else { v=kwx("地址"); if(v!==null) colAddr=v; }
-        v=kwx("備註"); if(v!==null) colNote=v;
-        v=kwx("診斷"); if(v!==null) colDiag=v;
-        v=kwx("更換管路"); if(v!==null) colChg=v;
-        v=kwx("預計"); if(v!==null) colPay=v;
-        const fi=joined.indexOf("費用");
-        if(fi>=0 && chars[fi][1] > ((colNote!==null?colNote:colPay)||0)) colFee=chars[fi][1];
-        continue;
-      }
-      if(!curZone) continue;
-
-      const seg=(lo,hi)=>chars.filter(c=>c[1]>=lo && c[1]<hi).map(c=>c[0]).join("").trim();
-      let nm="", ad="", nt="", tb="";
-      if(sub && colNameS!==null){
-        // ── 副表（新案）版面 ──
-        nm=cleanName(seg(colNameS-45, colNameS+75));
-        if(colAddrS!==null){
-          const hiA=(colChgS!==null)?colChgS-8:colAddrS+150;
-          ad=seg(colAddrS-130, hiA);
-        }
-        if(colChgS!==null){ nt=seg(colChgS+60, 1e9); tb=seg(colChgS-20, colChgS+58); }
-      }else{
-        // ── 主表版面 ──
-        if(colName!==null) nm=cleanName(seg(colName-45, colName+75));
-        if(colAddr!==null){
-          let hi;
-          if(colDiag!==null) hi=colDiag-8;
-          else if(colNote!==null) hi=colNote-8;
-          else if(colPay!==null) hi=colPay-8;
-          else hi=colAddr+250;
-          ad=seg(colAddr-130, hi);
-        }
-        let loN=null;
-        if(colNote!==null && colPay!==null) loN=Math.min((colPay+colNote)/2, colPay+18);
-        else if(colNote!==null) loN=colNote-18;
-        else if(colPay!==null) loN=colPay+18;
-        if(loN!==null){
-          const hiN=(colFee!==null && colFee>loN)?colFee-8:1e9;
-          nt=seg(loN, hiN);
-        }
-        if(colChg!==null){
-          // v5.1 斷行修復：不用硬邊界切字，改「字元連續群組＋最近欄錨點」歸類，
-          // 斷行片段（如 NG(16,SN+阿爾）起點超出舊邊界也能完整保留
-          const loT0=(colDiag!==null)?colDiag-10:colChg-60;
-          const hiT=(colPay!==null)?colPay-2:(loN!==null?loN:colChg+110);
-          const region=chars.filter(c=>c[1]>=loT0 && c[1]<hiT);
-          const runs=[]; let cur=null, prevX=null;
-          for(const [ch,x] of region){
-            if(cur===null || x-prevX>14){ cur={s:"",x0:x,x1:x}; runs.push(cur); }
-            cur.s+=ch; cur.x1=x; prevX=x;
-          }
-          const aD=(colDiag!==null)?colDiag+10:null, aT=colChg+20;
-          tb=runs.filter(r=>{
-            if(aD===null) return true;
-            const cx=(r.x0+r.x1)/2;
-            return Math.abs(cx-aT)<=Math.abs(cx-aD);   // 距管路錨點較近才算管路
-          }).map(r=>r.s).join("").trim();
-        }
-      }
-      // 姓名（含跨行姓名接續）
-      let justCreated=false;
-      if(nm && nameRe.test(nm) && !NAME_SKIP.has(nm) && !nameReject.test(nm)){
-        if(pending && pending.district===null && pending.addr===null && nameRe.test((pending.name||"")+nm)){
-          pending.name=(pending.name||"")+nm;
-        }else{
-          finalize();
-          justCreated=true;
-          pending={name:nm, zone:curZone, district:null, addr:null, notes:[], last:null, tubes:[]};
-          curBlock=bi;
-          flushOrphans();
-        }
-      }
-      // 地址
-      if(ad){
-        const dm=ad.match(distRe);
-        if(dm){
-          let d=dm[2];
-          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
-          if(dm[1]==="桃園市" || d==="桃園") d="桃園";
-          if(!pending){
-            pending={name:null, zone:curZone, district:null, addr:null, notes:[], last:null, tubes:[]};
-            curBlock=bi;
-            flushOrphans();
-          }
-          const atext=ad.slice(dm.index);
-          if(pending.district===null){ pending.district=d; pending.addr=atext; }
-          else pending.addr=(pending.addr||"")+" / "+atext;
-        }else if(pending && pending.addr && addrContRe.test(ad) && !/^[\d()+－\-/／、★@]+$/.test(ad)){
-          pending.addr+=ad;
-        }
-      }
-      // 備註（跑行歸位：落在下一個個案區塊的先暫存）
-      if(nt && !/^[=_\s]+$/.test(nt)){
-        if(bi>curBlock && bi>=0) orphanOf(bi).notes.push(nt);
-        else if(pending) pending.notes.push(nt);
-      }
-      // 管路（同上）
-      if(tb && !tb.includes("更換管路")){
-        if(bi>curBlock && bi>=0) orphanOf(bi).tubes.push(tb);
-        else if(pending) pending.tubes.push(tb);
-      }
-      // 上次訪視（跳過姓名建立行；限表格左半部）
-      if(pending && !justCreated && !pending.last){
-        const m2=joined.match(/1\d{2}-\d{2}-\d{2}/);
-        if(m2){
-          const xa = sub ? colAddrS : colAddr;
-          if(chars[m2.index][1] < (xa!==null && xa!==undefined ? xa : 300)) pending.last=m2[0];
-        }
-      }
-    }
-    // 不在頁尾 finalize：跨頁個案可接續
-  }
-  finalize();
-  return {org, dateISO, zones, unknowns, filename:file.name, gridPages, textPages};
-}
 
 /* ===== Excel 解析（SheetJS）：結構化來源 =====
    實測結構（預約訪視表-0721/0722.xlsx）：單一工作表，各 PDF 頁區塊垂直堆疊、大量合併儲存格；
@@ -835,7 +416,7 @@ async function parsePDF(file){
    （主列＝序號/訪視日/姓名/電話/診斷/更換管路/預計收費/備註；「✚」列＝上次訪視/地址）。
    新案副表表頭含「聯絡人」，電話/地址欄位置不同、無上次訪視。
    欄位對應完全依「表頭文字」動態決定（找到表頭列後以關鍵字定位各欄索引），不用固定索引或座標猜測。
-   輸出與 parsePDF 相同的 zones 結構 {zone:{count,districts,people}}，走同一條資料管線。 */
+   輸出 zones 結構 {zone:{count,districts,people}}。 */
 async function parseExcel(file){
   if(typeof XLSX === "undefined") throw new Error("SheetJS 未載入（請確認網路可連 cdnjs）");
   const wb = XLSX.read(await file.arrayBuffer(), {type:"array"});
@@ -970,9 +551,8 @@ async function handleFiles(files){
     let src="";
     try{
       let r;
-      if(ext==="pdf"){ src="PDF"; r=await parsePDF(f); }
-      else if(ext==="xlsx"||ext==="xls"){ src="Excel"; r=await parseExcel(f); }
-      else { msgs.push(`⚠ ${f.name}：非 PDF / Excel(.xlsx)，略過`); continue; }
+      if(ext==="xlsx"||ext==="xls"){ src="Excel"; r=await parseExcel(f); }
+      else { msgs.push(`⚠ ${f.name}：非 Excel(.xlsx)，略過${ext==="pdf"?"（本版僅支援 Excel，請改用 CareOne 匯出的 xlsx）":""}`); continue; }
       if(!r.org || !r.dateISO || Object.keys(r.zones).length===0){
         msgs.push(`⚠ ${f.name}【來源：${src}】：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
         continue;
@@ -989,8 +569,7 @@ async function handleFiles(files){
         parts.push(`${z}區${info.count}人（${dd||"—"}）`);
       }
       let line = `✅ ${f.name}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
-      if(src==="PDF") line += `｜格線解析 ${r.gridPages} 頁${r.textPages?`、文字模式 ${r.textPages} 頁`:""}`;
-      else line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
+      line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
       if(r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
