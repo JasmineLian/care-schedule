@@ -520,12 +520,20 @@ async function parseExcel(file){
       if(cols.addr>=0 && row[cols.addr]){
         const at=row[cols.addr];
         const dm=at.match(distRe);
+        let d=null, idx=-1;
         if(dm){
-          let d=dm[2];
+          d=dm[2];
           if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
           if(dm[1]==="桃園市" || d==="桃園") d="桃園";
-          if(pending.district===null){ pending.district=d; pending.addr=at.slice(dm.index); }
-          else pending.addr=(pending.addr||"")+" / "+at.slice(dm.index);
+          idx=dm.index;
+        }else{
+          // 桃園市轄下任何行政區（蘆竹、龜山、中壢…不在 DISTRICTS 清單內）一律歸「桃園」
+          const ti=at.indexOf("桃園市");
+          if(ti>=0){ d="桃園"; idx=ti; }
+        }
+        if(d!==null){
+          if(pending.district===null){ pending.district=d; pending.addr=at.slice(idx); }
+          else pending.addr=(pending.addr||"")+" / "+at.slice(idx);
         }else if(!pending.rawAddr && !dateRe.test(at) && /[路街巷弄號段村里鄰]/.test(at)){
           pending.rawAddr=at;   // 沒有行政區關鍵字的地址（機構等），保留供 INSTITUTIONS 判定與顯示
         }
