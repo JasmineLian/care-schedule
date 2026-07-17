@@ -241,6 +241,10 @@ const GROUPS = {
 };
 const DEFAULT_ZONES = { ivy:["A","B","C","D","G","H","J1","K","T"], tree:["B","D","E","F","G","J1"] };
 const ORG_NAME = { ivy:"常春藤", tree:"長青樹" };
+const NURSES = {
+  ivy: ["紫群","弘珍","虹霏","詩婷","家儀","美娟","力揚"],
+  tree: ["易芬","雅婷","翔伃","于婷","于瑩"]
+};
 const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義","士林","北投","內湖","南港","文山",
 "板橋","三重","中和","永和","新莊","新店","土城","蘆洲","汐止","樹林","鶯歌","三峽","淡水","瑞芳",
 "五股","泰山","林口","深坑","石碇","坪林","三芝","石門","八里","平溪","雙溪","貢寮","金山","萬里","烏來",
@@ -698,7 +702,7 @@ function render(){
       chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
       html += `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`;
       const nurse = info && info.nurse ? info.nurse : "";
-      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}')" title="點擊輸入護理師">${nurse}</td>`;
+      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurse}</td>`;
       html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
@@ -990,14 +994,25 @@ function quickRemove(ev, dateISO, zone, idx){
 }
 
 /* ===== 操作 ===== */
-function editNurse(dateISO, zone){
+function editNurse(dateISO, zone, ev){
   hideTipNow();
+  const td = ev.currentTarget;
+  if(td.querySelector('select')) return;   // 已開啟下拉選單
   const rec = getRec(curOrg, dateISO, zone);
   const cur = rec && rec.nurse ? rec.nurse : "";
-  const v = prompt(`${dateISO} ${zone}區 護理師：`, cur);
-  if(v===null) return;
-  ensureCell(curOrg, dateISO, zone).nurse = v.trim();
-  saveData(); render();
+  const list = NURSES[curOrg] || [];
+  let opts = `<option value="">（清除）</option>` +
+    list.map(n=>`<option value="${n}"${n===cur?" selected":""}>${n}</option>`).join("");
+  if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
+  td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:68px;background:#fff;color:#4a6da7;">${opts}</select>`;
+  const sel = td.querySelector('select');
+  sel.addEventListener('click', e=>e.stopPropagation());
+  sel.addEventListener('change', ()=>{
+    ensureCell(curOrg, dateISO, zone).nurse = sel.value;
+    saveData(); render();
+  });
+  sel.addEventListener('blur', ()=>render());
+  sel.focus();
 }
 function resetRange(){
   document.getElementById('dayFrom').value = "";
