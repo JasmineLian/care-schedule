@@ -45,7 +45,7 @@ h1{font-size:22px; color:var(--brand); margin-bottom:4px;}
 .zchip.all{border-style:dashed; color:var(--brand2); background:#fff; font-weight:normal;}
 .zchip{cursor:grab;}
 .zchip.dropover{outline:3px dashed #e67e22; outline-offset:1px;}
-.table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:auto; margin-bottom:14px; max-height:calc(100vh - 140px); min-height:280px;}
+.table-card{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow-x:auto; margin-bottom:14px;}
 table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
 th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
 thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px; box-shadow:0 2px 4px rgba(0,0,0,.15);}
@@ -173,7 +173,10 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 
   <div class="table-card"><table id="mainTable"></table></div>
 
-  <div class="legend" id="legend"></div>
+  <details class="legend" id="legendBox">
+    <summary style="cursor:pointer;font-size:13.5px;color:var(--brand);font-weight:bold;user-select:none;">🎨 鄰近區顏色圖例（點擊展開／收合）</summary>
+    <div id="legendBody" style="margin-top:8px;"></div>
+  </details>
 </div>
 
 <!-- 個案名單浮標視窗 -->
@@ -672,8 +675,15 @@ function render(){
   for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${z}區 行政區</th>`;
   html += "</tr></thead><tbody>";
 
-  let f = parseInt(document.getElementById('dayFrom').value)||1;
-  let t = parseInt(document.getElementById('dayTo').value)||days;
+  let f = parseInt(document.getElementById('dayFrom').value);
+  let t = parseInt(document.getElementById('dayTo').value);
+  if(!f && !t){
+    // 預設固定顯示 5 日：本月從今天起、其他月份從 1 號起（按「全月」可看整月）
+    const now = new Date();
+    const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
+    f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
+    t = f + 4;
+  }else{ f = f||1; t = t||days; }
   f = Math.max(1, Math.min(f, days));
   t = Math.max(f, Math.min(t, days));
   for(let d=f; d<=t; d++){
@@ -713,11 +723,11 @@ function render(){
   renderLegend();
 }
 function renderLegend(){
-  let h = `<h3>🎨 ${ORG_NAME[curOrg]}｜鄰近區顏色圖例（拖到空白處＝獨立、拖到標籤上＝合併大群、釘選後勾選拆分、✕ 移除、「＋」新增）</h3>`;
+  let h = `<div style="font-size:12px;color:var(--muted);margin-bottom:5px;">${ORG_NAME[curOrg]}｜拖到空白處＝獨立、拖到標籤上＝合併大群、釘選後勾選拆分、✕ 移除、「＋」新增</div>`;
   GROUPS[curOrg].forEach((g,i)=>{
     h += `<div class="row"><div class="sw" style="background:${g.color}"></div><b>${i+1}.</b> ${g.names.join("、")}</div>`;
   });
-  document.getElementById('legend').innerHTML = h;
+  document.getElementById('legendBody').innerHTML = h;
 }
 
 /* ===== 拖曳搬移 ===== */
@@ -1015,8 +1025,9 @@ function editNurse(dateISO, zone, ev){
   sel.focus();
 }
 function resetRange(){
-  document.getElementById('dayFrom').value = "";
-  document.getElementById('dayTo').value = "";
+  const [Y,M] = curYM.split("-").map(Number);
+  document.getElementById('dayFrom').value = 1;
+  document.getElementById('dayTo').value = new Date(Y, M, 0).getDate();
   render();
 }
 function switchOrg(org){
