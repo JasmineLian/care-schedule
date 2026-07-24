@@ -277,11 +277,18 @@ function parseInstQty(s){
   const m = String(s||"").match(/(\d+)\s*人/);
   return m ? +m[1] : null;
 }
-// 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案筆數
+// 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案明細筆數
 function tagCount(tag){
   if(!tag) return 0;
   if(tag.qty!=null && tag.qty!=="") return +tag.qty;
   return tag.people ? tag.people.length : 0;
+}
+// 分區顯示人數：宣告總數 + 機構代表的額外人數（機構 qty 減其明細筆數）
+function zoneCount(rec){
+  if(!rec) return 0;
+  let extra = 0;
+  (rec.tags||[]).forEach(t=>{ if(tagIsInst(t)) extra += (tagCount(t) - (t.people?t.people.length:0)); });
+  return (rec.count||0) + extra;
 }
 const WEEK = ["日","一","二","三","四","五","六"];
 const STORE_KEY = "careone-schedule-v1";
@@ -751,7 +758,7 @@ function render(){
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
-      const cnt = info ? info.count : "";
+      const cnt = info ? zoneCount(info) : "";
       let chips = "";
       if(info) info.tags.forEach((tag, i)=>{
         const c = colorOf(curOrg, tag.name);
@@ -1115,7 +1122,7 @@ function nurseStatsFor(org, ym){
       const nu = rr.nurse;
       if(!nu) continue;
       if(!stat[nu]) stat[nu] = {cases:0, days:new Set(), zones:0};
-      stat[nu].cases += (rr.count||0);
+      stat[nu].cases += zoneCount(rr);
       stat[nu].days.add(dateISO);
       stat[nu].zones += 1;
     }
@@ -1283,7 +1290,7 @@ function exportCSV(){
         const c = tagCount(t);
         return c ? `${t.name}(${c})` : t.name;
       }).join("、") : "";
-      row.push(info?info.count:"", info&&info.nurse?info.nurse:"", dd);
+      row.push(info?zoneCount(info):"", info&&info.nurse?info.nurse:"", dd);
     }
     rows.push(row);
   }
