@@ -268,10 +268,16 @@ const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義
 const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
 const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
 ["康庭","康庭"],["福安","福安"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
-// 代表「一家機構」的標籤：人數可手動設定（qty），不受個案明細筆數限制
-const INST_NAMES = new Set(["康庭","福安","童音","瑞礦","元康","銀泰","童心","長勤","愛心","吉康","盛禾"]);
-function isInst(name){ return INST_NAMES.has(name); }
-// 標籤有效人數：機構標籤若手動設過 qty 則以 qty 為準，否則用個案明細筆數
+// 機構標籤：不再用固定機構名清單判別，而是由「地址前綴 (XX機構)」自動偵測（見 parseExcel），
+// 標記於 tag.isInst；代表人數 qty 先由「實際申報」欄自動解析（例：15人(NG*11，F*6)→15、
+// Foley+5人→5、NG+Foley+3人(NG*1，F*2)→3），亦可釘選後手動編輯。
+function tagIsInst(tag){ return !!(tag && tag.isInst); }
+// 從「實際申報」文字取代表人數：抓「數字＋人」的第一個（人字前的數字）
+function parseInstQty(s){
+  const m = String(s||"").match(/(\d+)\s*人/);
+  return m ? +m[1] : null;
+}
+// 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案明細筆數
 function tagCount(tag){
   if(!tag) return 0;
   if(tag.qty!=null && tag.qty!=="") return +tag.qty;
@@ -483,6 +489,12 @@ async function parseExcel(file){
         tube: tidy(pending.tube),
         note: tidy(pending.note)
       });
+      // 機構單位（地址前綴 (XX機構)）：標記並累計代表人數（由「實際申報」欄解析）
+      if(pending.isInst){
+        z.instFlag = z.instFlag || {}; z.instFlag[d] = true;
+        const q = parseInstQty(pending.apply);
+        if(q!=null){ z.instQty = z.instQty || {}; z.instQty[d] = (z.instQty[d]||0) + q; }
+      }
     }
     pending=null;
   }
@@ -519,6 +531,7 @@ async function parseExcel(file){
           name: fc(flat,"姓名"),
           tube: fc(flat,"更換管路"),
           note: fc(flat,"備註"),
+          apply:fc(flat,"實際申報"),
           addr: fc(h2,"地址")>=0 ? fc(h2,"地址") : fc(flat,"電話")
         };
         if(flat.some(c=>c.includes("聯絡人"))) subHdrs++; else mainHdrs++;
@@ -535,7 +548,8 @@ async function parseExcel(file){
         if(NAME_SKIP.has(nm) || nameReject.test(nm) || nm.length<2) nm="";
         if(cols.date>=0){ const dm2=row[cols.date].match(dateRe); if(dm2) dateTally[dm2[0]]=(dateTally[dm2[0]]||0)+1; }
         pending={
-          zone:curZone, name:nm||null, district:null, addr:null, rawAddr:null, last:null,
+          zone:curZone, name:nm||null, district:null, addr:null, rawAddr:null, last:null, isInst:false,
+          apply: cols.apply>=0 ? row[cols.apply] : "",
           tube: cols.tube>=0 ? row[cols.tube] : "",
           note: cols.note>=0 ? row[cols.note] : ""
         };
@@ -548,25 +562,35 @@ async function parseExcel(file){
       }
       if(cols.addr>=0 && row[cols.addr]){
         const at=row[cols.addr];
-        const dm=at.match(distRe);
-        let d=null, idx=-1;
-        if(dm){
-          d=dm[2];
-          if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
-          if(dm[1]==="桃園市" || d==="桃園") d="桃園";
-          idx=dm.index;
+        // 機構單位：地址前綴 (XX機構) → 以機構名成一個獨立可編輯人數的標籤（優先於行政區判定）
+        const im=at.match(/[（(]\s*(.+?)\s*機構\s*[）)]\s*(.*)$/);
+        if(im && pending.district===null){
+          pending.district = im[1].trim();
+          pending.addr = (im[2]||"").trim() || at;
+          pending.isInst = true;
         }else{
-          // 桃園市轄下任何行政區（蘆竹、龜山、中壢…不在 DISTRICTS 清單內）一律歸「桃園」
-          const ti=at.indexOf("桃園市");
-          if(ti>=0){ d="桃園"; idx=ti; }
-        }
-        if(d!==null){
-          if(pending.district===null){ pending.district=d; pending.addr=at.slice(idx); }
-          else pending.addr=(pending.addr||"")+" / "+at.slice(idx);
-        }else if(!pending.rawAddr && !dateRe.test(at) && /[路街巷弄號段村里鄰]/.test(at)){
-          pending.rawAddr=at;   // 沒有行政區關鍵字的地址（機構等），保留供 INSTITUTIONS 判定與顯示
+          const dm=at.match(distRe);
+          let d=null, idx=-1;
+          if(dm){
+            d=dm[2];
+            if(dm[1]==="基隆市" || KEELUNG.has(d)) d="基隆";
+            if(dm[1]==="桃園市" || d==="桃園") d="桃園";
+            idx=dm.index;
+          }else{
+            // 桃園市轄下任何行政區（蘆竹、龜山、中壢…不在 DISTRICTS 清單內）一律歸「桃園」
+            const ti=at.indexOf("桃園市");
+            if(ti>=0){ d="桃園"; idx=ti; }
+          }
+          if(d!==null){
+            if(pending.district===null){ pending.district=d; pending.addr=at.slice(idx); }
+            else pending.addr=(pending.addr||"")+" / "+at.slice(idx);
+          }else if(!pending.rawAddr && !dateRe.test(at) && /[路街巷弄號段村里鄰]/.test(at)){
+            pending.rawAddr=at;   // 沒有行政區關鍵字的地址，保留供顯示
+          }
         }
       }
+      // 實際申報若落在接續列，補抓（機構代表人數來源）
+      if(cols.apply>=0 && !pending.apply && row[cols.apply]) pending.apply=row[cols.apply];
       if(cols.tube>=0 && row[cols.tube] && !row[cols.tube].includes("更換管路") && !/^[=_\s✚+]+$/.test(row[cols.tube]))
         pending.tube=(pending.tube?pending.tube+" ":"")+row[cols.tube];
       if(cols.note>=0 && row[cols.note] && !/^[=_\s✚+]+$/.test(row[cols.note]))
@@ -606,7 +630,11 @@ async function handleFiles(files){
       let mismatch=[];
       for(const [z,info] of Object.entries(r.zones)){
         // 解析結果（districts/people）→ 新標籤陣列格式
-        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>({name:d, people: info.people[d]||[]})), nurse: oldNurses[z]||""};
+        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>{
+          const tg = {name:d, people: info.people[d]||[]};
+          if(info.instFlag && info.instFlag[d]){ tg.isInst=true; if(info.instQty && info.instQty[d]!=null) tg.qty=info.instQty[d]; }
+          return tg;
+        }), nurse: oldNurses[z]||""};
         const parsed = Object.values(info.people).reduce((s,a)=>s+a.length,0);
         if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
         const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
@@ -728,8 +756,8 @@ function render(){
       if(info) info.tags.forEach((tag, i)=>{
         const c = colorOf(curOrg, tag.name);
         const ppl = tagCount(tag);
-        const inst = isInst(tag.name);
-        const badge = ppl ? `<span class="cbadge"${inst?' style="background:#e67e22;"':''}>${ppl}</span>` : (inst?`<span class="cbadge" style="background:#e67e22;">?</span>`:"");
+        const inst = tagIsInst(tag);
+        const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
         const unk = tag.name==="未判定" ? " unknown" : "";
         chips += `<span class="chip${unk}" draggable="true" title="${inst?'機構標籤：釘選後可編輯代表人數':''}" style="${c?`background:${c};`:""}"
           ondragstart="dragStart(event,'${dateISO}','${z}',${i})" ondragend="dragEnd(event)"
@@ -910,15 +938,15 @@ function buildTipContent(dateISO, zone, idx){
   tipSel = new Set();
   document.getElementById('tipTitle').textContent = `📍 ${tag.name}（${tagCount(tag)||"—"} 人）｜${dateISO} ${zone}區`;
   let h = "";
-  if(isInst(tag.name)){
+  if(tagIsInst(tag)){
     h += `<div style="background:#fff7e6;border:1px solid #ffe0a3;border-radius:8px;padding:7px 9px;margin-bottom:7px;font-size:12px;">
       🏥 機構代表人數：<b style="font-size:14px;color:#e67e22;">${tagCount(tag)}</b>
       <button class="btn" style="padding:2px 9px;font-size:11px;margin-left:8px;" onclick="editInstQty('${dateISO}','${zone}',${idx})">✏️ 編輯數量</button>
-      <div style="color:var(--muted);margin-top:3px;line-height:1.4;">此標籤代表一家機構，可手動設定代表人數（獨立於下方個案明細筆數）</div>
+      <div style="color:var(--muted);margin-top:3px;line-height:1.4;">此標籤代表一家機構（依地址前綴「(XX機構)」判定），人數已由「實際申報」自動帶入，可手動修改（獨立於下方個案明細）</div>
     </div>`;
   }
   if(ppl.length===0){
-    h += `<div class="none">${isInst(tag.name)?"此機構標籤尚無個案明細，人數以上方設定為準":"此標籤為手動新增，尚無個案明細"}</div>`;
+    h += `<div class="none">${tagIsInst(tag)?"此機構標籤尚無個案明細，人數以上方設定為準":"此標籤為手動新增，尚無個案明細"}</div>`;
   }else{
     ppl.forEach((p,i)=>{
       h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}</div>`;
@@ -1166,7 +1194,7 @@ function openModal(dateISO, zone){
   hideTipNow();
   editing = {org:curOrg, dateISO, zone};
   const rec = getRec(curOrg, dateISO, zone);
-  tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[], qty:t.qty})) : [];
+  tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[], qty:t.qty, isInst:t.isInst})) : [];
   document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
   document.getElementById('editCount').value = rec ? rec.count : "";
   document.getElementById('customInput').value = "";
@@ -1226,7 +1254,7 @@ function saveCell(){
   const rec0 = data[editing.org][editing.dateISO][editing.zone];
   data[editing.org][editing.dateISO][editing.zone] = {
     count: cnt,
-    tags: tempTags.map(t=>{ const o={name:t.name, people:t.people||[]}; if(t.qty!=null && t.qty!=="") o.qty=+t.qty; return o; }),
+    tags: tempTags.map(t=>{ const o={name:t.name, people:t.people||[]}; if(t.qty!=null && t.qty!=="") o.qty=+t.qty; if(t.isInst) o.isInst=true; return o; }),
     nurse: rec0 && rec0.nurse ? rec0.nurse : ""
   };
   saveData(); closeModal(); render(); toast("已更新");
