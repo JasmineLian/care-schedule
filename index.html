@@ -162,6 +162,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       &nbsp;～&nbsp;<input type="number" id="dayTo" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;日&nbsp;<button onclick="resetRange()" style="font-size:12px;">全月</button>
     </div>
+    <button class="btn" onclick="showNurseStats()">📊 護理師統計</button>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
     <button class="btn" onclick="manualSync()">🔄 同步最新</button>
@@ -191,6 +192,18 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="tip-body" id="tipBody"></div>
   <div class="tip-foot" id="tipFoot" style="display:none;">
     <button class="btn" id="splitBtn" disabled onclick="splitSelected()">✂ 勾選個案後拆分成小標籤</button>
+  </div>
+</div>
+
+<!-- 護理師每月統計 Modal -->
+<div class="modal-bg" id="nurseModalBg">
+  <div class="modal">
+    <h3 id="nurseModalTitle">📊 護理師每月個案統計</h3>
+    <div id="nurseStatsBody"></div>
+    <div class="acts">
+      <button class="btn" onclick="exportNurseCSV()">⬇ 匯出統計 CSV</button>
+      <button class="btn primary" onclick="closeNurseStats()">關閉</button>
+    </div>
   </div>
 </div>
 
@@ -255,6 +268,15 @@ const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義
 const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
 const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
 ["康庭","康庭"],["福安","福安"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
+// 代表「一家機構」的標籤：人數可手動設定（qty），不受個案明細筆數限制
+const INST_NAMES = new Set(["康庭","福安","童音","瑞礦","元康","銀泰","童心","長勤","愛心","吉康","盛禾"]);
+function isInst(name){ return INST_NAMES.has(name); }
+// 標籤有效人數：機構標籤若手動設過 qty 則以 qty 為準，否則用個案明細筆數
+function tagCount(tag){
+  if(!tag) return 0;
+  if(tag.qty!=null && tag.qty!=="") return +tag.qty;
+  return tag.people ? tag.people.length : 0;
+}
 const WEEK = ["日","一","二","三","四","五","六"];
 const STORE_KEY = "careone-schedule-v1";
 const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差","清寒","福保重大"]);
@@ -574,12 +596,17 @@ async function handleFiles(files){
         msgs.push(`⚠ ${f.name}【來源：${src}】：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
         continue;
       }
-      if(!data[r.org][r.dateISO]) data[r.org][r.dateISO]={};
+      // 重新上傳同一天：整日覆蓋為最新內容（僅保留各分區已手動指定的護理師）
+      const oldDay = data[r.org][r.dateISO] || {};
+      const oldNurses = {};
+      for(const [z,rec0] of Object.entries(oldDay)){ if(rec0){ const rr=normalizeRec(rec0); if(rr.nurse) oldNurses[z]=rr.nurse; } }
+      const hadDay = Object.keys(oldDay).length>0;
+      data[r.org][r.dateISO] = {};
       const parts=[];
       let mismatch=[];
       for(const [z,info] of Object.entries(r.zones)){
         // 解析結果（districts/people）→ 新標籤陣列格式
-        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>({name:d, people: info.people[d]||[]}))};
+        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>({name:d, people: info.people[d]||[]})), nurse: oldNurses[z]||""};
         const parsed = Object.values(info.people).reduce((s,a)=>s+a.length,0);
         if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
         const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
@@ -587,6 +614,7 @@ async function handleFiles(files){
       }
       let line = `✅ ${f.name}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
       line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
+      if(hadDay) line += `<br>　🔄 已覆蓋此日期原有暫存資料（保留原護理師指定）`;
       if(r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
@@ -699,10 +727,11 @@ function render(){
       let chips = "";
       if(info) info.tags.forEach((tag, i)=>{
         const c = colorOf(curOrg, tag.name);
-        const ppl = tag.people ? tag.people.length : 0;
-        const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
+        const ppl = tagCount(tag);
+        const inst = isInst(tag.name);
+        const badge = ppl ? `<span class="cbadge"${inst?' style="background:#e67e22;"':''}>${ppl}</span>` : (inst?`<span class="cbadge" style="background:#e67e22;">?</span>`:"");
         const unk = tag.name==="未判定" ? " unknown" : "";
-        chips += `<span class="chip${unk}" draggable="true" style="${c?`background:${c};`:""}"
+        chips += `<span class="chip${unk}" draggable="true" title="${inst?'機構標籤：釘選後可編輯代表人數':''}" style="${c?`background:${c};`:""}"
           ondragstart="dragStart(event,'${dateISO}','${z}',${i})" ondragend="dragEnd(event)"
           ondragover="chipDragOver(event)" ondragleave="chipDragLeave(event)" ondrop="chipDrop(event,'${dateISO}','${z}',${i})"
           onmouseenter="chipEnter(event,'${dateISO}','${z}',${i})" onmouseleave="chipLeave()"
@@ -879,10 +908,17 @@ function buildTipContent(dateISO, zone, idx){
   const ppl = tag.people || [];
   tipCtx = {dateISO, zone, idx};
   tipSel = new Set();
-  document.getElementById('tipTitle').textContent = `📍 ${tag.name}（${ppl.length||"—"} 人）｜${dateISO} ${zone}區`;
+  document.getElementById('tipTitle').textContent = `📍 ${tag.name}（${tagCount(tag)||"—"} 人）｜${dateISO} ${zone}區`;
   let h = "";
+  if(isInst(tag.name)){
+    h += `<div style="background:#fff7e6;border:1px solid #ffe0a3;border-radius:8px;padding:7px 9px;margin-bottom:7px;font-size:12px;">
+      🏥 機構代表人數：<b style="font-size:14px;color:#e67e22;">${tagCount(tag)}</b>
+      <button class="btn" style="padding:2px 9px;font-size:11px;margin-left:8px;" onclick="editInstQty('${dateISO}','${zone}',${idx})">✏️ 編輯數量</button>
+      <div style="color:var(--muted);margin-top:3px;line-height:1.4;">此標籤代表一家機構，可手動設定代表人數（獨立於下方個案明細筆數）</div>
+    </div>`;
+  }
   if(ppl.length===0){
-    h = `<div class="none">此標籤為手動新增，尚無個案明細</div>`;
+    h += `<div class="none">${isInst(tag.name)?"此機構標籤尚無個案明細，人數以上方設定為準":"此標籤為手動新增，尚無個案明細"}</div>`;
   }else{
     ppl.forEach((p,i)=>{
       h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}</div>`;
@@ -1024,6 +1060,80 @@ function editNurse(dateISO, zone, ev){
   sel.addEventListener('blur', ()=>render());
   sel.focus();
 }
+/* ===== 機構標籤：編輯代表人數 ===== */
+function editInstQty(dateISO, zone, idx){
+  const rec = getRec(curOrg, dateISO, zone);
+  const tag = rec && rec.tags[idx];
+  if(!tag) return;
+  const cur = tagCount(tag);
+  const v = prompt(`「${tag.name}」機構代表人數：`, cur);
+  if(v===null) return;
+  const n = parseInt(v, 10);
+  if(isNaN(n) || n<0){ toast("請輸入 0 或正整數"); return; }
+  tag.qty = n;
+  hideTipNow(); saveData(); render();
+  toast(`已設定「${tag.name}」代表 ${n} 人`);
+}
+
+/* ===== 護理師每月個案統計 ===== */
+function nurseStatsFor(org, ym){
+  const [Y,M] = ym.split("-").map(Number);
+  const days = new Date(Y, M, 0).getDate();
+  const stat = {};
+  for(let d=1; d<=days; d++){
+    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const rec = data[org][dateISO] || {};
+    for(const [z, r0] of Object.entries(rec)){
+      const rr = normalizeRec(r0);
+      const nu = rr.nurse;
+      if(!nu) continue;
+      if(!stat[nu]) stat[nu] = {cases:0, days:new Set(), zones:0};
+      stat[nu].cases += (rr.count||0);
+      stat[nu].days.add(dateISO);
+      stat[nu].zones += 1;
+    }
+  }
+  (NURSES[org]||[]).forEach(n=>{ if(!stat[n]) stat[n]={cases:0, days:new Set(), zones:0}; });
+  return Object.entries(stat).sort((a,b)=> b[1].cases-a[1].cases || a[0].localeCompare(b[0]));
+}
+function showNurseStats(){
+  const [Y,M] = curYM.split("-").map(Number);
+  const rows = nurseStatsFor(curOrg, curYM);
+  const tot = rows.reduce((s,[,v])=>s+v.cases,0);
+  let h = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${ORG_NAME[curOrg]}｜${Y}年${M}月　（個案數＝該護理師負責分區的「人數」加總）</div>`;
+  h += `<table style="width:100%;border-collapse:collapse;font-size:13px;min-width:0;">
+    <thead><tr>
+      <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">護理師</th>
+      <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">個案數</th>
+      <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">出勤天數</th>
+      <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">負責分區次數</th>
+    </tr></thead><tbody>`;
+  rows.forEach(([n,s])=>{
+    h += `<tr>
+      <td style="border:1px solid var(--line);padding:6px;font-weight:bold;">${n}</td>
+      <td style="border:1px solid var(--line);padding:6px;text-align:center;font-weight:bold;color:var(--brand);">${s.cases}</td>
+      <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.days.size}</td>
+      <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.zones}</td>
+    </tr>`;
+  });
+  h += `</tbody></table><div style="margin-top:8px;font-size:12.5px;color:var(--muted);">合計個案數：<b>${tot}</b></div>`;
+  document.getElementById('nurseModalTitle').textContent = `📊 ${ORG_NAME[curOrg]} 護理師每月個案統計`;
+  document.getElementById('nurseStatsBody').innerHTML = h;
+  document.getElementById('nurseModalBg').classList.add('show');
+}
+function closeNurseStats(){ document.getElementById('nurseModalBg').classList.remove('show'); }
+function exportNurseCSV(){
+  const [Y,M] = curYM.split("-").map(Number);
+  const rows = nurseStatsFor(curOrg, curYM);
+  const out = [["護理師","個案數","出勤天數","負責分區次數"]];
+  rows.forEach(([n,s])=> out.push([n, s.cases, s.days.size, s.zones]));
+  const csv = "﻿" + out.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download = `${ORG_NAME[curOrg]}_${curYM}_護理師統計.csv`;
+  a.click();
+}
+
 function resetRange(){
   const [Y,M] = curYM.split("-").map(Number);
   document.getElementById('dayFrom').value = 1;
@@ -1056,7 +1166,7 @@ function openModal(dateISO, zone){
   hideTipNow();
   editing = {org:curOrg, dateISO, zone};
   const rec = getRec(curOrg, dateISO, zone);
-  tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[]})) : [];
+  tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[], qty:t.qty})) : [];
   document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
   document.getElementById('editCount').value = rec ? rec.count : "";
   document.getElementById('customInput').value = "";
@@ -1070,7 +1180,7 @@ function renderPicker(){
   }else{
     sel.innerHTML = tempTags.map((t,i)=>{
       const c = colorOf(curOrg, t.name);
-      const n = t.people ? t.people.length : 0;
+      const n = tagCount(t);
       const badge = n ? `<span class="cbadge">${n}</span>` : "";
       return `<span class="chip" style="${c?`background:${c};`:""}">${t.name}${badge}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
     }).join("");
@@ -1116,7 +1226,7 @@ function saveCell(){
   const rec0 = data[editing.org][editing.dateISO][editing.zone];
   data[editing.org][editing.dateISO][editing.zone] = {
     count: cnt,
-    tags: tempTags.map(t=>({name:t.name, people:t.people||[]})),
+    tags: tempTags.map(t=>{ const o={name:t.name, people:t.people||[]}; if(t.qty!=null && t.qty!=="") o.qty=+t.qty; return o; }),
     nurse: rec0 && rec0.nurse ? rec0.nurse : ""
   };
   saveData(); closeModal(); render(); toast("已更新");
@@ -1143,7 +1253,7 @@ function exportCSV(){
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
       const dd = info ? info.tags.map(t=>{
-        const c = t.people ? t.people.length : 0;
+        const c = tagCount(t);
         return c ? `${t.name}(${c})` : t.name;
       }).join("、") : "";
       row.push(info?info.count:"", info&&info.nurse?info.nurse:"", dd);
@@ -1179,6 +1289,7 @@ document.getElementById('fileInput').addEventListener('change', e=>{
   e.target.value="";
 });
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
+document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.target.id==='nurseModalBg') closeNurseStats(); });
 
 /* 啟動 */
 (async ()=>{
