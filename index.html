@@ -277,7 +277,7 @@ function parseInstQty(s){
   const m = String(s||"").match(/(\d+)\s*人/);
   return m ? +m[1] : null;
 }
-// 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案明細筆數
+// 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案筆數
 function tagCount(tag){
   if(!tag) return 0;
   if(tag.qty!=null && tag.qty!=="") return +tag.qty;
@@ -942,7 +942,6 @@ function buildTipContent(dateISO, zone, idx){
     h += `<div style="background:#fff7e6;border:1px solid #ffe0a3;border-radius:8px;padding:7px 9px;margin-bottom:7px;font-size:12px;">
       🏥 機構代表人數：<b style="font-size:14px;color:#e67e22;">${tagCount(tag)}</b>
       <button class="btn" style="padding:2px 9px;font-size:11px;margin-left:8px;" onclick="editInstQty('${dateISO}','${zone}',${idx})">✏️ 編輯數量</button>
-      <div style="color:var(--muted);margin-top:3px;line-height:1.4;">此標籤代表一家機構（依地址前綴「(XX機構)」判定），人數已由「實際申報」自動帶入，可手動修改（獨立於下方個案明細）</div>
     </div>`;
   }
   if(ppl.length===0){
