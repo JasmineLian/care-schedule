@@ -483,9 +483,14 @@ async function parseExcel(file){
   const cellS = v => String(v==null?"":v).trim();
   const tidy = s => String(s||"").replace(/\s*=\s*_{3,}/g,"").replace(/_{3,}/g,"").replace(/\s+/g," ").trim();
   function cleanName(s){
-    s=s.replace(/1\d{2}-\d{2}-\d{2}/g,"");
-    s=s.replace(/[0-9A-Za-z().（）\/／+＋★@]+/g,"");
-    return s.replace(/\s+/g,"").replace(/^[-－ ]+|[-－ ]+$/g,"");
+    s=String(s||"");
+    s=s.replace(/1\d{2}-\d{2}-\d{2}/g,"");          // 日期
+    s=s.replace(/[（(][^）)]*[）)]/g,"");             // 括號內代碼，如 (G89)
+    s=s.replace(/[A-Za-z]?\d{3,}/g,"");              // ID／長數字，如 A203654343
+    s=s.replace(/[／\/+＋★@]+/g,"");                 // 雜訊符號
+    s=s.replace(/\s+/g," ").trim();                  // 收斂空白（保留英文名詞間單一空白）
+    s=s.replace(/([一-鿿])\s+(?=[一-鿿])/g,"$1"); // 中文字之間不留空白
+    return s.replace(/^[-－ ]+|[-－ ]+$/g,"").trim(); // 英文名（THAI HUNG）與中文名皆保留
   }
   function ensureZone(z){ if(!zones[z]) zones[z]={count:0,districts:[],people:{}}; return zones[z]; }
   function finalize(){
