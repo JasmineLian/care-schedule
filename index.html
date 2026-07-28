@@ -234,25 +234,29 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 
 <script>
 /* ===== 設定 ===== */
+// 機構單位獨立一組、同一顏色（不與行政區混色）
+const INST_COLOR = "#B39DDB";
 const GROUPS = {
   ivy: [
     {names:["士林","大同","中山","松山"], color:"#F8BBD0"},
-    {names:["萬華","中正","文山","大安","信義","康庭","福安"], color:"#FFF59D"},
+    {names:["萬華","中正","文山","大安","信義"], color:"#FFF59D"},
     {names:["平溪","雙溪","貢寮"], color:"#FFCC80"},
     {names:["深坑","石碇","坪林"], color:"#C8E6C9"},
-    {names:["南港","內湖","童音","瑞芳","瑞礦"], color:"#90CAF9"},
+    {names:["南港","內湖","瑞芳"], color:"#90CAF9"},
     {names:["基隆","金山","萬里"], color:"#CE93D8"},
-    {names:["汐止","元康","銀泰","童心"], color:"#80DEEA"},
+    {names:["汐止"], color:"#80DEEA"},
     {names:["桃園"], color:"#FFAB91"},
+    {names:["康庭","福安","童音","瑞礦","元康","銀泰","童心"], color:INST_COLOR},
   ],
   tree: [
-    {names:["北投","淡水","三芝","石門","長勤"], color:"#90CAF9"},
-    {names:["三重","蘆洲","八里","愛心"], color:"#C8E6C9"},
-    {names:["泰山","新莊","板橋","吉康","盛禾"], color:"#FFCC80"},
+    {names:["北投","淡水","三芝","石門"], color:"#90CAF9"},
+    {names:["三重","蘆洲","八里"], color:"#C8E6C9"},
+    {names:["泰山","新莊","板橋"], color:"#FFCC80"},
     {names:["中和","永和","新店","烏來"], color:"#F8BBD0"},
     {names:["土城","樹林","三峽","林口"], color:"#CE93D8"},
     {names:["五股"], color:"#80CBC4"},
     {names:["桃園"], color:"#FFAB91"},
+    {names:["長勤","愛心","吉康","盛禾"], color:INST_COLOR},
   ]
 };
 const DEFAULT_ZONES = { ivy:["A","B","C","D","G","H","J1","K","T"], tree:["B","D","E","F","G","J1"] };
@@ -268,7 +272,13 @@ const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義
 const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
 const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
 ["康庭","康庭"],["福安","福安"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
-// 機構標籤：不再用固定機構名清單判別，而是由「地址前綴 (XX機構)」自動偵測（見 parseExcel），
+// 機構名稱關鍵字（含別名）：地址括號內只要出現其一即判為機構單位，標籤名用對應機構名
+const INST_KEYWORDS = ["康庭","福安","童音","瑞礦","瑞芳礦工","元康","銀泰","童心","長勤","愛心","吉康","盛禾"];
+function instNameOf(text){
+  for(const kw of INST_KEYWORDS){ if(text.includes(kw)) return kw==="瑞芳礦工" ? "瑞礦" : kw; }
+  return null;
+}
+// 機構標籤：由「地址括號內含機構名（康庭/福安/…）或寫『機構』」自動偵測（見 parseExcel），
 // 標記於 tag.isInst；代表人數 qty 先由「實際申報」欄自動解析（例：15人(NG*11，F*6)→15、
 // Foley+5人→5、NG+Foley+3人(NG*1，F*2)→3），亦可釘選後手動編輯。
 function tagIsInst(tag){ return !!(tag && tag.isInst); }
@@ -483,7 +493,7 @@ async function parseExcel(file){
       let d=pending.district;
       if(!d){
         const blob=(pending.name||"")+" "+(pending.rawAddr||"")+" "+(pending.note||"");
-        for(const [kw,alias] of INSTITUTIONS){ if(blob.includes(kw)){ d=alias; break; } }
+        for(const [kw,alias] of INSTITUTIONS){ if(blob.includes(kw)){ d=alias; pending.isInst=true; break; } }
       }
       if(!d){ d="未判定"; unknowns.push(`${pending.zone}區 ${pending.name||"（無名）"}`); }
       const z=ensureZone(pending.zone);
@@ -521,7 +531,13 @@ async function parseExcel(file){
       if(zm){
         finalize();
         let z=zm[1]||"";
-        if(!z || /^P\d*$/.test(z) || /^\d+$/.test(z)) z="其他";
+        const blank = !z || /^P\d*$/.test(z) || /^\d+$/.test(z);
+        if(blank && curZone){
+          // 無區碼的「區總人數」＝同一區跨頁接續（序號延續 15→16…），不新開區、把人數累加進本區
+          ensureZone(curZone).count += +zm[2];
+          continue;
+        }
+        if(blank) z="其他";       // 沒有前一區可接續時才歸「其他」
         curZone=z;
         ensureZone(z).count=+zm[2];
         continue;
@@ -569,10 +585,17 @@ async function parseExcel(file){
       }
       if(cols.addr>=0 && row[cols.addr]){
         const at=row[cols.addr];
-        // 機構單位：地址前綴 (XX機構) → 以機構名成一個獨立可編輯人數的標籤（優先於行政區判定）
-        const im=at.match(/[（(]\s*(.+?)\s*機構\s*[）)]\s*(.*)$/);
-        if(im && pending.district===null){
-          pending.district = im[1].trim();
+        // 機構單位：地址括號前綴 (…) 內只要「寫到機構」或「含機構名（康庭/福安/元康…）」→
+        // 以機構名成一個獨立可編輯人數的標籤（優先於行政區判定）。例：(銀泰機構)、(元康護理之家)
+        const im=at.match(/[（(]\s*(.+?)\s*[）)]\s*(.*)$/);
+        let instName=null;
+        if(im){
+          const inside=im[1];
+          if(inside.includes("機構")) instName=inside.replace(/\s*機構.*$/,"").trim();
+          else instName=instNameOf(inside);
+        }
+        if(instName && pending.district===null){
+          pending.district = instName;
           pending.addr = (im[2]||"").trim() || at;
           pending.isInst = true;
         }else{
@@ -1140,14 +1163,12 @@ function showNurseStats(){
       <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">護理師</th>
       <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">個案數</th>
       <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">出勤天數</th>
-      <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">負責分區次數</th>
     </tr></thead><tbody>`;
   rows.forEach(([n,s])=>{
     h += `<tr>
       <td style="border:1px solid var(--line);padding:6px;font-weight:bold;">${n}</td>
       <td style="border:1px solid var(--line);padding:6px;text-align:center;font-weight:bold;color:var(--brand);">${s.cases}</td>
       <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.days.size}</td>
-      <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.zones}</td>
     </tr>`;
   });
   h += `</tbody></table><div style="margin-top:8px;font-size:12.5px;color:var(--muted);">合計個案數：<b>${tot}</b></div>`;
@@ -1159,8 +1180,8 @@ function closeNurseStats(){ document.getElementById('nurseModalBg').classList.re
 function exportNurseCSV(){
   const [Y,M] = curYM.split("-").map(Number);
   const rows = nurseStatsFor(curOrg, curYM);
-  const out = [["護理師","個案數","出勤天數","負責分區次數"]];
-  rows.forEach(([n,s])=> out.push([n, s.cases, s.days.size, s.zones]));
+  const out = [["護理師","個案數","出勤天數"]];
+  rows.forEach(([n,s])=> out.push([n, s.cases, s.days.size]));
   const csv = "﻿" + out.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
