@@ -596,8 +596,13 @@ async function parseExcel(file){
         let instName=null;
         if(im){
           const inside=im[1];
-          if(inside.includes("機構")) instName=inside.replace(/\s*機構.*$/,"").trim();
-          else instName=instNameOf(inside);
+          if(inside.includes("機構")){
+            const short=inside.replace(/\s*機構.*$/,"").trim();
+            // 已知機構用簡稱（童心/康庭…）；名稱非已知機構者（如「信義機構」與行政區同名）保留全名，避免混淆
+            instName = INST_KEYWORDS.includes(short) ? short : inside.trim();
+          }else{
+            instName=instNameOf(inside);
+          }
         }
         if(instName && pending.district===null){
           pending.district = instName;
@@ -789,9 +794,9 @@ function render(){
       const cnt = info ? zoneCount(info) : "";
       let chips = "";
       if(info) info.tags.forEach((tag, i)=>{
-        const c = colorOf(curOrg, tag.name);
-        const ppl = tagCount(tag);
         const inst = tagIsInst(tag);
+        const c = inst ? INST_COLOR : colorOf(curOrg, tag.name);
+        const ppl = tagCount(tag);
         const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
         const unk = tag.name==="未判定" ? " unknown" : "";
         chips += `<span class="chip${unk}" draggable="true" title="${inst?'機構標籤：釘選後可編輯代表人數':''}" style="${c?`background:${c};`:""}"
@@ -1102,21 +1107,65 @@ function quickRemove(ev, dateISO, zone, idx){
 }
 
 /* ===== 操作 ===== */
+/* ===== 護理師名單（預設 + 使用者自訂，可自行新增／移除）===== */
+function nurseList(org){
+  let custom=[];
+  try{ custom=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]'); }catch(e){}
+  const seen=new Set(), out=[];
+  [...(NURSES[org]||[]), ...custom].forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); out.push(n); } });
+  return out;
+}
+function saveCustomNurses(org, arr){
+  const base=new Set(NURSES[org]||[]);
+  const custom=arr.filter(n=>!base.has(n));
+  try{ localStorage.setItem('careone-nurses-'+org, JSON.stringify(custom)); }catch(e){}
+}
+function addNurse(org){
+  const v=prompt("新增護理師姓名：","");
+  if(v===null) return null;
+  const name=v.trim();
+  if(!name) return null;
+  const list=nurseList(org);
+  if(!list.includes(name)){ list.push(name); saveCustomNurses(org, list); toast(`已新增護理師「${name}」`); }
+  return name;
+}
+function manageNurses(org){
+  let custom=[];
+  try{ custom=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]'); }catch(e){}
+  if(!custom.length){ toast("目前沒有自訂護理師（預設名單不可移除）"); return; }
+  const v=prompt(`輸入要移除的自訂護理師姓名：\n（目前自訂：${custom.join("、")}）`, "");
+  if(v===null) return;
+  const name=v.trim();
+  if(name && custom.includes(name)){
+    saveCustomNurses(org, nurseList(org).filter(n=>n!==name));
+    toast(`已移除「${name}」`);
+  }else if(name){
+    toast(`自訂名單找不到「${name}」`);
+  }
+}
 function editNurse(dateISO, zone, ev){
   hideTipNow();
   const td = ev.currentTarget;
   if(td.querySelector('select')) return;   // 已開啟下拉選單
   const rec = getRec(curOrg, dateISO, zone);
   const cur = rec && rec.nurse ? rec.nurse : "";
-  const list = NURSES[curOrg] || [];
+  const list = nurseList(curOrg);
   let opts = `<option value="">（清除）</option>` +
     list.map(n=>`<option value="${n}"${n===cur?" selected":""}>${n}</option>`).join("");
   if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
-  td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:68px;background:#fff;color:#4a6da7;">${opts}</select>`;
+  opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">🗂 移除自訂…</option>`;
+  td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:78px;background:#fff;color:#4a6da7;">${opts}</select>`;
   const sel = td.querySelector('select');
   sel.addEventListener('click', e=>e.stopPropagation());
   sel.addEventListener('change', ()=>{
-    ensureCell(curOrg, dateISO, zone).nurse = sel.value;
+    const v = sel.value;
+    if(v==="__add__"){
+      const name=addNurse(curOrg);
+      if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; saveData(); }
+      render(); return;
+    }
+    if(v==="__manage__"){ manageNurses(curOrg); render(); return; }
+    ensureCell(curOrg, dateISO, zone).nurse = v;
     saveData(); render();
   });
   sel.addEventListener('blur', ()=>render());
@@ -1155,7 +1204,7 @@ function nurseStatsFor(org, ym){
       stat[nu].zones += 1;
     }
   }
-  (NURSES[org]||[]).forEach(n=>{ if(!stat[n]) stat[n]={cases:0, days:new Set(), zones:0}; });
+  nurseList(org).forEach(n=>{ if(!stat[n]) stat[n]={cases:0, days:new Set(), zones:0}; });
   return Object.entries(stat).sort((a,b)=> b[1].cases-a[1].cases || a[0].localeCompare(b[0]));
 }
 function showNurseStats(){
@@ -1239,7 +1288,7 @@ function renderPicker(){
     sel.innerHTML = '<div class="empty">尚未選擇，點下方色塊即可加入</div>';
   }else{
     sel.innerHTML = tempTags.map((t,i)=>{
-      const c = colorOf(curOrg, t.name);
+      const c = tagIsInst(t) ? INST_COLOR : colorOf(curOrg, t.name);
       const n = tagCount(t);
       const badge = n ? `<span class="cbadge">${n}</span>` : "";
       return `<span class="chip" style="${c?`background:${c};`:""}">${t.name}${badge}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
