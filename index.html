@@ -645,21 +645,38 @@ async function parseExcel(file){
   return {org, dateISO, zones, unknowns, filename:file.name, src:"Excel", mainHdrs, subHdrs};
 }
 
-async function handleFiles(files){
+/* ===== 套用解析結果（Excel 上傳／程式匯入 共用）=====
+   results：parseExcel() 回傳物件的陣列
+            {org, dateISO, zones, unknowns, filename, src, mainHdrs, subHdrs}
+   preMsgs：呼叫端已經產生的訊息（例如檔案解析失敗），會併入報告一起顯示。
+   ※ saveData() 是把整包 data POST 上去覆蓋，不是增量更新。
+     因此寫入前先 loadData() 取回共用資料庫最新內容，避免蓋掉他人剛做的修改。*/
+async function applyParsed(results, preMsgs){
   const report = document.getElementById('parseReport');
-  const msgs=[];
-  let ok=0;
-  for(const f of files){
-    const ext=(f.name.toLowerCase().match(/\.([a-z0-9]+)$/)||[])[1]||"";
-    let src="";
+  const msgs = Array.isArray(preMsgs) ? preMsgs.slice() : [];
+  results = Array.isArray(results) ? results : [results];
+  let ok = 0;
+  if(results.length && hasRemote){
+    // 只在「確實取到遠端資料」時才覆蓋 data；取不到就沿用目前畫面的資料，
+    // 不走 loadData() 的本機備援，避免把共用資料換成空的 localStorage 內容。
     try{
-      let r;
-      if(ext==="xlsx"||ext==="xls"){ src="Excel"; r=await parseExcel(f); }
-      else { msgs.push(`⚠ ${f.name}：非 Excel(.xlsx)，略過${ext==="pdf"?"（本版僅支援 Excel，請改用 CareOne 匯出的 xlsx）":""}`); continue; }
-      if(!r.org || !r.dateISO || Object.keys(r.zones).length===0){
-        msgs.push(`⚠ ${f.name}【來源：${src}】：無法辨識（機構=${r.org?ORG_NAME[r.org]:'?'}，日期=${r.dateISO||'?'}）`);
+      const rs = await fetch(SYNC_URL + "?t=" + Date.now());
+      const rj = await rs.json();
+      if(rj && rj.data){ data = rj.data; lastUpdatedAt = rj.updatedAt || lastUpdatedAt; migrateAll(); }
+      else throw new Error("回應格式不正確");
+    }catch(e){
+      msgs.push(`⚠ 無法取得最新共用資料，改以目前畫面的資料為基礎寫入（${e.message}）`);
+    }
+  }
+  for(const r of results){
+    const fname = (r && r.filename) || "（未命名）";
+    const src   = (r && r.src) || "JSON";
+    try{
+      if(!r || !r.org || !r.dateISO || !r.zones || Object.keys(r.zones).length===0){
+        msgs.push(`⚠ ${fname}【來源：${src}】：無法辨識（機構=${r&&r.org?ORG_NAME[r.org]:'?'}，日期=${(r&&r.dateISO)||'?'}）`);
         continue;
       }
+      if(!data[r.org]){ msgs.push(`⚠ ${fname}【來源：${src}】：未知機構代碼 ${r.org}`); continue; }
       // 重新上傳同一天：整日覆蓋為最新內容（僅保留各分區已手動指定的護理師）
       const oldDay = data[r.org][r.dateISO] || {};
       const oldNurses = {};
@@ -670,27 +687,27 @@ async function handleFiles(files){
       let mismatch=[];
       for(const [z,info] of Object.entries(r.zones)){
         // 解析結果（districts/people）→ 新標籤陣列格式
-        data[r.org][r.dateISO][z] = {count:info.count, tags: info.districts.map(d=>{
-          const tg = {name:d, people: info.people[d]||[]};
+        data[r.org][r.dateISO][z] = {count:info.count, tags: (info.districts||[]).map(d=>{
+          const tg = {name:d, people: (info.people && info.people[d]) || []};
           if(info.instFlag && info.instFlag[d]){ tg.isInst=true; if(info.instQty && info.instQty[d]!=null) tg.qty=info.instQty[d]; }
           return tg;
         }), nurse: oldNurses[z]||""};
-        const parsed = Object.values(info.people).reduce((s,a)=>s+a.length,0);
+        const parsed = Object.values(info.people||{}).reduce((s,a)=>s+a.length,0);
         if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
-        const dd = info.districts.map(d=>`${d}${info.people[d]?info.people[d].length:""}`).join("、");
+        const dd = (info.districts||[]).map(d=>`${d}${info.people&&info.people[d]?info.people[d].length:""}`).join("、");
         parts.push(`${z}區${info.count}人（${dd||"—"}）`);
       }
-      let line = `✅ ${f.name}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
-      line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
+      let line = `✅ ${fname}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
+      if(r.mainHdrs!=null) line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
       if(hadDay) line += `<br>　🔄 已覆蓋此日期原有暫存資料（保留原護理師指定）`;
-      if(r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
+      if(r.unknowns && r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
       ok++;
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
     }catch(e){
-      msgs.push(`❌ ${f.name}${src?`【來源：${src}】`:""}：解析錯誤 ${e.message}`);
+      msgs.push(`❌ ${fname}【來源：${src}】：套用錯誤 ${e.message}`);
     }
   }
   report.innerHTML = msgs.join("<br>");
@@ -700,6 +717,22 @@ async function handleFiles(files){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.org===curOrg));
   render();
   toast(ok>0 ? `已更新 ${ok} 個檔案的資料` : "沒有成功解析的檔案");
+  return ok;
+}
+
+async function handleFiles(files){
+  const results=[];
+  const msgs=[];
+  for(const f of files){
+    const ext=(f.name.toLowerCase().match(/\.([a-z0-9]+)$/)||[])[1]||"";
+    try{
+      if(ext==="xlsx"||ext==="xls"){ results.push(await parseExcel(f)); }
+      else { msgs.push(`⚠ ${f.name}：非 Excel(.xlsx)，略過${ext==="pdf"?"（本版僅支援 Excel，請改用 CareOne 匯出的 xlsx）":""}`); }
+    }catch(e){
+      msgs.push(`❌ ${f.name}【來源：Excel】：解析錯誤 ${e.message}`);
+    }
+  }
+  return applyParsed(results, msgs);
 }
 
 /* ===== 表格 ===== */
