@@ -50,7 +50,8 @@ table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
 th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
 thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px; box-shadow:0 2px 4px rgba(0,0,0,.15);}
 thead th.zone{background:var(--brand2);}
-td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd;}
+td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd; white-space:nowrap;}
+tr.msep td{background:#dfe4ee !important; color:var(--brand); font-weight:bold; text-align:left; font-size:12.5px; padding:4px 10px; letter-spacing:.5px;}
 tr.wknd td{background:#f1f2f6;}
 tr.wknd td.day,tr.wknd td.wd{background:#e8eaf0;}
 td.cnt{width:56px; font-weight:bold; font-size:14px; cursor:pointer;}
@@ -152,16 +153,28 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="parse-report" id="parseReport"></div>
 
   <div class="toolbar">
-    <div class="month-nav">
+    <div class="month-nav" id="monthNav">
       <button onclick="navMonth(-1)">◀</button>
       <div class="month-label" id="monthLabel"></div>
       <button onclick="navMonth(1)">▶</button>
     </div>
-    <div class="month-nav" title="只顯示這個範圍的日期">
+    <div class="month-nav" id="dayRangeBox" title="只顯示這個範圍的日期">
       顯示&nbsp;<input type="number" id="dayFrom" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;～&nbsp;<input type="number" id="dayTo" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;日&nbsp;<button onclick="resetRange()" style="font-size:12px;">全月</button>
     </div>
+    <div class="month-nav" id="spanBox" style="display:none;" title="跨月區間：可自由選擇起訖日期，橫跨任意月份">
+      <button onclick="shiftSpan(-1)" title="往前平移一個區間長度">◀</button>
+      <input type="date" id="spanFrom" style="padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:12.5px;" onchange="onSpanChange()">
+      &nbsp;～&nbsp;
+      <input type="date" id="spanTo" style="padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:12.5px;" onchange="onSpanChange()">
+      <button onclick="shiftSpan(1)" title="往後平移一個區間長度">▶</button>
+      <span style="font-size:11px;color:var(--muted);" id="spanInfo"></span>
+      <button onclick="spanPreset(7)" style="font-size:12px;">7天</button>
+      <button onclick="spanPreset(14)" style="font-size:12px;">14天</button>
+      <button onclick="spanPreset(30)" style="font-size:12px;">30天</button>
+    </div>
+    <button class="btn" id="spanToggle" onclick="toggleSpanMode()">📅 跨月區間</button>
     <button class="btn" onclick="showNurseStats()">📊 護理師統計</button>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
@@ -309,6 +322,7 @@ const NOTE_SKIP_PREFIX = ["方鼎掛號","申報核對","預約訪視：","社�
 let data = { ivy:{}, tree:{} };
 let curOrg = "ivy";
 let curYM = null;
+let spanMode = false;          // true＝跨月區間模式（自由起訖日期）
 let editing = null;
 let tempTags = [];
 let dragInfo = null;
@@ -706,6 +720,7 @@ async function applyParsed(results, preMsgs){
       ok++;
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
+      ensureDateVisible(r.dateISO);   // 跨月模式：自動把區間延伸到剛上傳的日期，避免看不到
     }catch(e){
       msgs.push(`❌ ${fname}【來源：${src}】：套用錯誤 ${e.message}`);
     }
@@ -736,11 +751,107 @@ async function handleFiles(files){
 }
 
 /* ===== 表格 ===== */
-function zonesForMonth(org, ym){
-  const set = new Set(DEFAULT_ZONES[org]);
-  for(const [d, zs] of Object.entries(data[org])){
-    if(d.startsWith(ym)) Object.keys(zs).forEach(z=>set.add(z));
+/* ===== 跨月區間：日期工具 ===== */
+const SPAN_MAX_DAYS = 120;     // 上限，避免誤填造成表格過長
+function toISO(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function fromISO(s){ const [y,m,d]=String(s).split('-').map(Number); return new Date(y, m-1, d); }
+function addDays(d, n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+
+/* 目前畫面要顯示的日期清單（月份模式 → 該月區間；跨月模式 → 起訖日期，可橫跨任意月份）*/
+function viewDates(){
+  if(spanMode){
+    const sf=document.getElementById('spanFrom').value;
+    const st=document.getElementById('spanTo').value;
+    if(!sf || !st) return [];
+    let a=fromISO(sf), b=fromISO(st);
+    if(a>b){ const tmp=a; a=b; b=tmp; }
+    const out=[];
+    for(let d=new Date(a); d<=b && out.length<SPAN_MAX_DAYS; d=addDays(d,1)) out.push(toISO(d));
+    return out;
   }
+  const [Y,M] = curYM.split("-").map(Number);
+  const days = new Date(Y, M, 0).getDate();
+  let f = parseInt(document.getElementById('dayFrom').value);
+  let t = parseInt(document.getElementById('dayTo').value);
+  if(!f && !t){
+    // 預設固定顯示 5 日：本月從今天起、其他月份從 1 號起（按「全月」可看整月）
+    const now = new Date();
+    const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
+    f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
+    t = f + 4;
+  }else{ f = f||1; t = t||days; }
+  f = Math.max(1, Math.min(f, days));
+  t = Math.max(f, Math.min(t, days));
+  const out=[];
+  for(let d=f; d<=t; d++) out.push(`${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+  return out;
+}
+
+/* ===== 跨月模式切換與操作 ===== */
+function applyModeUI(){
+  document.getElementById('monthNav').style.display    = spanMode ? "none" : "";
+  document.getElementById('dayRangeBox').style.display = spanMode ? "none" : "";
+  document.getElementById('spanBox').style.display     = spanMode ? "" : "none";
+  const b=document.getElementById('spanToggle');
+  b.textContent = spanMode ? "📆 回月份模式" : "📅 跨月區間";
+  b.classList.toggle('primary', spanMode);
+}
+function defaultSpan(){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(sf.value && st.value) return;
+  const now=new Date();
+  const [Y,M]=curYM.split("-").map(Number);
+  const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
+  const start = isCur ? now : new Date(Y, M-1, 1);
+  sf.value = toISO(start);
+  st.value = toISO(addDays(start, 13));   // 預設 14 天
+}
+function toggleSpanMode(){
+  spanMode = !spanMode;
+  if(spanMode) defaultSpan();
+  try{ localStorage.setItem('careone-spanmode', spanMode?'1':'0'); }catch(e){}
+  applyModeUI();
+  syncYMToSpan();
+  render();
+}
+function onSpanChange(){ syncYMToSpan(); render(); }
+/* 跨月時把 curYM 對齊區間起始月，讓「護理師統計／清除本月」有明確依據 */
+function syncYMToSpan(){
+  if(!spanMode) return;
+  const sf=document.getElementById('spanFrom').value;
+  if(sf) curYM = sf.slice(0,7);
+}
+/* 上傳／跳轉時，若該日期不在目前跨月區間內就自動延伸包含它 */
+function ensureDateVisible(dateISO){
+  if(!spanMode || !dateISO) return;
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value || !st.value){ defaultSpan(); }
+  let a=fromISO(sf.value), b=fromISO(st.value);
+  if(a>b){ const t=a; a=b; b=t; }
+  const d=fromISO(dateISO);
+  if(d<a) sf.value=dateISO; else if(d>b) st.value=dateISO;
+  else { sf.value=toISO(a); st.value=toISO(b); }
+  syncYMToSpan();
+}
+function shiftSpan(dir){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value || !st.value){ defaultSpan(); }
+  let a=fromISO(sf.value), b=fromISO(st.value);
+  if(a>b){ const t=a; a=b; b=t; }
+  const len=Math.round((b-a)/86400000)+1;
+  sf.value=toISO(addDays(a, dir*len));
+  st.value=toISO(addDays(b, dir*len));
+  onSpanChange();
+}
+function spanPreset(n){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value) sf.value=toISO(new Date());
+  st.value=toISO(addDays(fromISO(sf.value), n-1));
+  onSpanChange();
+}
+
+/* 分區欄位：跨月時取整個顯示區間出現過的分區聯集 */
+function sortZones(org, set){
   const ord = zoneOrder(org);
   return [...set].sort((a,b)=>{
     const ia=ord.indexOf(a), ib=ord.indexOf(b);
@@ -749,6 +860,18 @@ function zonesForMonth(org, ym){
     if(ib>=0) return 1;
     return a<b?-1:(a>b?1:0);
   });
+}
+function zonesForDates(org, dates){
+  const set = new Set(DEFAULT_ZONES[org]);
+  for(const d of dates){ const zs=data[org][d]; if(zs) Object.keys(zs).forEach(z=>set.add(z)); }
+  return sortZones(org, set);
+}
+function zonesForMonth(org, ym){
+  const set = new Set(DEFAULT_ZONES[org]);
+  for(const [d, zs] of Object.entries(data[org])){
+    if(d.startsWith(ym)) Object.keys(zs).forEach(z=>set.add(z));
+  }
+  return sortZones(org, set);
 }
 /* ===== 區欄位順序（拖曳 zonebar 晶片換位）===== */
 function zoneOrder(org){
@@ -766,7 +889,7 @@ function zoneDrop(ev, target){
   ev.preventDefault(); ev.currentTarget.classList.remove('dropover');
   const src=zoneDragName; zoneDragName=null;
   if(!src || src===target) return;
-  const arr=zonesForMonth(curOrg, curYM).filter(z=>z!==src);
+  const arr=zonesForDates(curOrg, viewDates()).filter(z=>z!==src);
   arr.splice(arr.indexOf(target), 0, src);
   saveZoneOrder(arr); render();
   toast(`已將 ${src}區 移到 ${target}區 前面`);
@@ -787,8 +910,16 @@ function render(){
   hideTipNow();
   const [Y,M] = curYM.split("-").map(Number);
   document.getElementById('monthLabel').textContent = `${Y}年${M}月`;
-  const days = new Date(Y, M, 0).getDate();
-  const allZones = zonesForMonth(curOrg, curYM);
+  const dates = viewDates();                       // ← 跨月模式時可橫跨多個月份
+  const months = [...new Set(dates.map(d=>d.slice(0,7)))];
+  const crossMonth = months.length > 1;
+  if(spanMode){
+    const info=document.getElementById('spanInfo');
+    if(info) info.textContent = dates.length
+      ? `共 ${dates.length} 天${crossMonth?`（跨 ${months.length} 個月）`:""}${dates.length>=SPAN_MAX_DAYS?`・已達上限 ${SPAN_MAX_DAYS} 天`:""}`
+      : "請選擇起訖日期";
+  }
+  const allZones = zonesForDates(curOrg, dates);   // 分區欄位＝整個顯示區間的聯集
   const hid = hiddenZones();
   const zones = allZones.filter(z=>!hid.has(z));
   document.getElementById('zoneBar').innerHTML = '<b>顯示區域：</b>' +
@@ -798,29 +929,28 @@ function render(){
       onclick="toggleZone('${z}')" title="點擊顯示/隱藏，拖曳可換位">${z}區</span>`).join('') +
     `<span class="zchip all" onclick="showAllZones()">全部顯示</span>
      <span style="font-size:11px;color:var(--muted);">（拖曳晶片可調整欄位左右順序）</span>`;
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = toISO(new Date());
 
-  let html = "<thead><tr><th>日</th><th>週</th>";
+  let html = "<thead><tr><th>" + (crossMonth ? "月/日" : "日") + "</th><th>週</th>";
   for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${z}區 行政區</th>`;
   html += "</tr></thead><tbody>";
 
-  let f = parseInt(document.getElementById('dayFrom').value);
-  let t = parseInt(document.getElementById('dayTo').value);
-  if(!f && !t){
-    // 預設固定顯示 5 日：本月從今天起、其他月份從 1 號起（按「全月」可看整月）
-    const now = new Date();
-    const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
-    f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
-    t = f + 4;
-  }else{ f = f||1; t = t||days; }
-  f = Math.max(1, Math.min(f, days));
-  t = Math.max(f, Math.min(t, days));
-  for(let d=f; d<=t; d++){
-    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+  const colSpanAll = 2 + zones.length*3;
+  let prevYM = null;
+  for(const dateISO of dates){
+    const dt = fromISO(dateISO);
+    const dNum = dt.getDate(), ym = dateISO.slice(0,7);
+    // 跨月時插入月份分隔列，方便辨識
+    if(crossMonth && ym!==prevYM){
+      const [yy,mm] = ym.split("-").map(Number);
+      html += `<tr class="msep"><td colspan="${colSpanAll}">${yy} 年 ${mm} 月</td></tr>`;
+    }
+    prevYM = ym;
+    const wd = WEEK[dt.getDay()];
     const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
     const today = dateISO===todayISO ? " today" : "";
-    html += `<tr class="${wknd}${today}"><td class="day">${d}</td><td class="wd">${wd}</td>`;
+    const dayLabel = crossMonth ? `${dt.getMonth()+1}/${dNum}` : dNum;
+    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}</td><td class="wd">${wd}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
@@ -847,6 +977,9 @@ function render(){
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
     html += "</tr>";
+  }
+  if(!dates.length){
+    html += `<tr><td colspan="${colSpanAll}" style="padding:26px;color:var(--muted);">請在上方選擇起訖日期</td></tr>`;
   }
   html += "</tbody>";
   document.getElementById('mainTable').innerHTML = html;
@@ -1382,16 +1515,17 @@ function deleteCell(){
 
 /* CSV 匯出 */
 function exportCSV(){
-  const [Y,M] = curYM.split("-").map(Number);
-  const days = new Date(Y, M, 0).getDate();
+  // 跟著畫面顯示區間（跨月模式即匯出整段跨月資料）
+  const dates = viewDates();
+  if(!dates.length){ toast("目前沒有可匯出的日期"); return; }
   const hid = hiddenZones();
-  const zones = zonesForMonth(curOrg, curYM).filter(z=>!hid.has(z));
+  const zones = zonesForDates(curOrg, dates).filter(z=>!hid.has(z));
   let rows = [["日期","週", ...zones.flatMap(z=>[`${z}區人數`,`${z}區護理師`,`${z}區行政區`])]];
-  for(let d=1; d<=days; d++){
-    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+  for(const dateISO of dates){
+    const dt = fromISO(dateISO);
+    const wd = WEEK[dt.getDay()];
     const rec = data[curOrg][dateISO]||{};
-    const row=[d, wd];
+    const row=[dateISO, wd];
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
       const dd = info ? info.tags.map(t=>{
@@ -1405,7 +1539,7 @@ function exportCSV(){
   const csv = "﻿" + rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download = `${ORG_NAME[curOrg]}_${curYM}_行程表.csv`;
+  a.download = `${ORG_NAME[curOrg]}_${dates[0]}_至_${dates[dates.length-1]}_行程表.csv`;
   a.click();
 }
 
@@ -1437,6 +1571,10 @@ document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.targ
 (async ()=>{
   const now = new Date();
   curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  try{ spanMode = localStorage.getItem('careone-spanmode')==='1'; }catch(e){}
+  if(spanMode) defaultSpan();
+  applyModeUI();
+  syncYMToSpan();
   initUser();
   await loadData();
   render();
