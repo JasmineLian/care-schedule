@@ -354,7 +354,7 @@ async function loadData(){
       if(j && j.data) data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
       migrateAll();
-      setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : ""));
+      setStatus("✓ 已載入共用資料｜最後編輯：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : ""));
       return;
     }catch(e){ setStatus("⚠ 無法連線共用資料庫，改用本機模式"); }
   }
@@ -386,7 +386,8 @@ function saveData(){
         const r = await fetch(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
         const j = await r.json();
         lastUpdatedAt = j.updatedAt || Date.now();
-        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）`);
+        // 真正寫入雲端（有改資料）才會記錄成一筆「最後編輯」
+        setStatus("✓ 已儲存並同步｜最後編輯：" + fmtDT(lastUpdatedAt) + `（${userName}）`);
       }catch(e){ setStatus("⚠ 同步失敗，請按 🔄 同步重試"); }
       pendingSave = false;
       return;
@@ -407,7 +408,9 @@ function saveData(){
   }, 500);
 }
 
-/* ===== 自動拉取他人更新 ===== */
+/* ===== 自動拉取他人更新 =====
+   ★ 同步只做 GET 讀取、不會寫入雲端：單純按「🔄 同步最新」而沒有實際改資料／上傳的人，
+     不會被記錄成一筆更新。「最後編輯」永遠只反映真正異動過資料的人與時間。 */
 async function pollRemote(force){
   if(!hasRemote || pendingSave) return;
   if(document.getElementById('modalBg').classList.contains('show')) return;  // 編輯中不打擾
@@ -415,22 +418,33 @@ async function pollRemote(force){
   try{
     const r = await fetch(SYNC_URL + "?t=" + Date.now());
     const j = await r.json();
-    if(j && j.updatedAt && (force || j.updatedAt > lastUpdatedAt)){
-      if(j.updatedAt !== lastUpdatedAt){
-        data = j.data || data;
-        lastUpdatedAt = j.updatedAt;
-        migrateAll();
-        render();
-        toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
-      }
-      setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user?`（${j.user}）`:""));
+    if(!j || !j.updatedAt){
+      if(force) setStatus("✓ 已是最新（雲端尚無資料）");
+      return;
     }
-  }catch(e){}
+    const who = j.user ? `（${j.user}）` : "";
+    if(j.updatedAt !== lastUpdatedAt){
+      // 真的有人改過資料 → 套用並標示是誰改的
+      data = j.data || data;
+      lastUpdatedAt = j.updatedAt;
+      migrateAll();
+      render();
+      toast(`已載入最新資料${j.user?`（${j.user} 更新）`:""}`);
+      setStatus("✓ 已更新到最新｜最後編輯：" + fmtDT(lastUpdatedAt) + who);
+    }else if(force){
+      // 手動按同步、但雲端沒有任何新變更 → 這次點擊不算一筆動作，只回報現況
+      setStatus("✓ 已是最新，無新變更｜最後編輯：" + fmtDT(lastUpdatedAt) + who);
+      toast("目前已是最新，沒有新變更");
+    }
+    // 自動輪詢且無變更時：完全不顯示、不記錄
+  }catch(e){
+    if(force) setStatus("⚠ 同步失敗，請稍後再試");
+  }
 }
 async function manualSync(){
   if(!hasRemote){ toast("尚未設定共用資料庫（見 部署教學.md）"); return; }
-  setStatus("同步中…");
-  await pollRemote(true);
+  setStatus("讀取中…");
+  await pollRemote(true);   // 只讀取，不寫入
 }
 function setStatus(t){ document.getElementById('saveStatus').textContent=t; }
 function fmtDT(ts){
@@ -720,7 +734,7 @@ async function applyParsed(results, preMsgs){
       ok++;
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
-      ensureDateVisible(r.dateISO);   // 跨月模式：自動把區間延伸到剛上傳的日期，避免看不到
+      ensureDateVisible(r.dateISO);   // 跨月模式：自動把區間延伸到剛上傳的日期
     }catch(e){
       msgs.push(`❌ ${fname}【來源：${src}】：套用錯誤 ${e.message}`);
     }
@@ -774,7 +788,6 @@ function viewDates(){
   let f = parseInt(document.getElementById('dayFrom').value);
   let t = parseInt(document.getElementById('dayTo').value);
   if(!f && !t){
-    // 預設固定顯示 5 日：本月從今天起、其他月份從 1 號起（按「全月」可看整月）
     const now = new Date();
     const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
     f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
