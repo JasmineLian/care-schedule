@@ -175,6 +175,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       <button onclick="spanPreset(30)" style="font-size:12px;">30天</button>
     </div>
     <button class="btn" id="spanToggle" onclick="toggleSpanMode()">📅 跨月區間</button>
+    <button class="btn" onclick="openLeaveModal()">🏖 護理師請假</button>
     <button class="btn" onclick="showNurseStats()">📊 護理師統計</button>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
@@ -205,6 +206,46 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="tip-body" id="tipBody"></div>
   <div class="tip-foot" id="tipFoot" style="display:none;">
     <button class="btn" id="splitBtn" disabled onclick="splitSelected()">✂ 勾選個案後拆分成小標籤</button>
+  </div>
+</div>
+
+<!-- 護理師名單管理 Modal -->
+<div class="modal-bg" id="nurseMgrBg">
+  <div class="modal">
+    <h3 id="nurseMgrTitle">👥 護理師名單管理</h3>
+    <label>➕ 新增護理師</label>
+    <div class="custom-row">
+      <input type="text" id="nurseMgrInput" placeholder="輸入姓名後按新增" onkeydown="if(event.key==='Enter')addNurseFromMgr()">
+      <button class="btn" onclick="addNurseFromMgr()">新增</button>
+    </div>
+    <label>📋 目前名單（點 ✕ 刪除，預設與自訂都可刪）</label>
+    <div class="selected-area" id="nurseMgrList" style="max-height:240px;overflow:auto;"></div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">刪除只是從選單移除，已排好的班不會被更動；刪掉的預設護理師可用上面「新增」加回來。名單會同步給所有共用者。</div>
+    <div class="acts">
+      <button class="btn primary" onclick="closeNurseMgr()">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- 護理師請假 Modal -->
+<div class="modal-bg" id="leaveModalBg">
+  <div class="modal">
+    <h3 id="leaveModalTitle">🏖 護理師請假登記</h3>
+    <label>👤 護理師　<span style="font-weight:normal;color:var(--brand2);cursor:pointer;text-decoration:underline;" onclick="closeLeaveModal();openNurseMgr();">（管理名單）</span></label>
+    <select id="leaveNurse" style="padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:14px;min-width:120px;"></select>
+    <label>📅 請假日期（可一次選連續多天）</label>
+    <div class="custom-row">
+      <input type="date" id="leaveFrom" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">
+      <span style="align-self:center;">～</span>
+      <input type="date" id="leaveTo" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">
+      <button class="btn primary" onclick="addLeaveFromForm()">新增請假</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">登記後，該護理師在這些日期會從排班下拉選單中反灰不可選；若當天已排到他的班，會自動清空。</div>
+    <label>📋 已登記的請假（點 ✕ 取消）</label>
+    <div class="selected-area" id="leaveList" style="max-height:240px;overflow:auto;"></div>
+    <div class="acts">
+      <button class="btn primary" onclick="closeLeaveModal()">關閉</button>
+    </div>
   </div>
 </div>
 
@@ -475,6 +516,7 @@ function normalizeRec(rec){
 }
 function migrateAll(){
   for(const org of Object.keys(data)){
+    if(org.startsWith('__')) continue;   // __leave 等非機構資料，不做個案格式轉換
     for(const day of Object.values(data[org]||{})){
       for(const z of Object.keys(day)) normalizeRec(day[z]);
     }
@@ -963,7 +1005,9 @@ function render(){
     const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
     const today = dateISO===todayISO ? " today" : "";
     const dayLabel = crossMonth ? `${dt.getMonth()+1}/${dNum}` : dNum;
-    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}</td><td class="wd">${wd}</td>`;
+    const lvNames = leaveOn(curOrg, dateISO);
+    const lvMark = lvNames.length ? ` <span title="請假：${lvNames.join('、')}" style="font-size:11px;">🏖</span>` : "";
+    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}${lvMark}</td><td class="wd">${wd}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
@@ -1286,41 +1330,101 @@ function quickRemove(ev, dateISO, zone, idx){
 }
 
 /* ===== 操作 ===== */
-/* ===== 護理師名單（預設 + 使用者自訂，可自行新增／移除）===== */
+/* ===== 護理師名單 =====
+   存在 data.__nurses（跟著雲端一起同步、全體共用）：{ivy:{add:[新增的],del:[刪掉的預設]}, tree:{…}}
+   實際名單 ＝ 預設 NURSES － del ＋ add（預設與自訂都可刪，刪掉的可再新增回來） */
+function nurseStore(){
+  if(!data.__nurses || typeof data.__nurses!=='object' || Array.isArray(data.__nurses)) data.__nurses={};
+  for(const o of ['ivy','tree']){
+    const v=data.__nurses[o];
+    if(!v || typeof v!=='object' || Array.isArray(v)) data.__nurses[o]={add:[],del:[]};
+    else { if(!Array.isArray(v.add)) v.add=[]; if(!Array.isArray(v.del)) v.del=[]; }
+  }
+  return data.__nurses;
+}
 function nurseList(org){
-  let custom=[];
-  try{ custom=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]'); }catch(e){}
-  const seen=new Set(), out=[];
-  [...(NURSES[org]||[]), ...custom].forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); out.push(n); } });
+  const st=nurseStore()[org];
+  const del=new Set(st.del), seen=new Set(), out=[];
+  [...(NURSES[org]||[]), ...st.add].forEach(n=>{
+    n=(n||'').trim();
+    if(n && !del.has(n) && !seen.has(n)){ seen.add(n); out.push(n); }
+  });
   return out;
 }
-function saveCustomNurses(org, arr){
-  const base=new Set(NURSES[org]||[]);
-  const custom=arr.filter(n=>!base.has(n));
-  try{ localStorage.setItem('careone-nurses-'+org, JSON.stringify(custom)); }catch(e){}
+function isDefaultNurse(org,name){ return (NURSES[org]||[]).includes(name); }
+function nurseAdd(org, name){
+  name=(name||'').trim(); if(!name) return false;
+  const st=nurseStore()[org];
+  st.del=st.del.filter(x=>x!==name);                       // 之前刪掉的 → 重新啟用
+  if(!isDefaultNurse(org,name) && !st.add.includes(name)) st.add.push(name);
+  return true;
+}
+function nurseDelete(org, name){
+  const st=nurseStore()[org];
+  st.add=st.add.filter(x=>x!==name);
+  if(isDefaultNurse(org,name) && !st.del.includes(name)) st.del.push(name);  // 預設的用 del 標記隱藏
+}
+/* 舊版名單存在 localStorage → 第一次載入時自動搬到雲端 */
+function migrateLocalNurses(){
+  let changed=false;
+  for(const o of ['ivy','tree']){
+    try{
+      const raw=localStorage.getItem('careone-nurses-'+o);
+      if(!raw) continue;
+      (JSON.parse(raw)||[]).forEach(x=>{ if(nurseAdd(o,x)) changed=true; });
+      localStorage.removeItem('careone-nurses-'+o);
+    }catch(e){}
+  }
+  if(changed){ saveData(); toast("已把本機的自訂護理師名單搬到雲端共用"); }
+}
+/* 名單有異動時，同步刷新「請假」視窗的護理師下拉 */
+function syncLeaveNurseSelect(){
+  const sel=document.getElementById('leaveNurse');
+  if(!sel) return;
+  const keep=sel.value;
+  sel.innerHTML = nurseList(curOrg).map(n=>`<option value="${n}">${n}</option>`).join("");
+  if([...sel.options].some(o=>o.value===keep)) sel.value=keep;
 }
 function addNurse(org){
   const v=prompt("新增護理師姓名：","");
   if(v===null) return null;
-  const name=v.trim();
-  if(!name) return null;
-  const list=nurseList(org);
-  if(!list.includes(name)){ list.push(name); saveCustomNurses(org, list); toast(`已新增護理師「${name}」`); }
+  const name=v.trim(); if(!name) return null;
+  if(nurseList(org).includes(name)){ toast(`「${name}」已在名單中`); return name; }
+  nurseAdd(org,name); saveData(); syncLeaveNurseSelect();
+  toast(`已新增護理師「${name}」`);
   return name;
 }
-function manageNurses(org){
-  let custom=[];
-  try{ custom=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]'); }catch(e){}
-  if(!custom.length){ toast("目前沒有自訂護理師（預設名單不可移除）"); return; }
-  const v=prompt(`輸入要移除的自訂護理師姓名：\n（目前自訂：${custom.join("、")}）`, "");
-  if(v===null) return;
-  const name=v.trim();
-  if(name && custom.includes(name)){
-    saveCustomNurses(org, nurseList(org).filter(n=>n!==name));
-    toast(`已移除「${name}」`);
-  }else if(name){
-    toast(`自訂名單找不到「${name}」`);
-  }
+
+/* ===== 護理師名單管理視窗（新增／刪除，預設與自訂皆可刪）===== */
+function openNurseMgr(){
+  hideTipNow();
+  document.getElementById('nurseMgrTitle').textContent=`👥 ${ORG_NAME[curOrg]} 護理師名單管理`;
+  document.getElementById('nurseMgrInput').value="";
+  renderNurseMgr();
+  document.getElementById('nurseMgrBg').classList.add('show');
+}
+function closeNurseMgr(){ document.getElementById('nurseMgrBg').classList.remove('show'); }
+function renderNurseMgr(){
+  const list=nurseList(curOrg);
+  const box=document.getElementById('nurseMgrList');
+  if(!list.length){ box.innerHTML='<div class="empty">名單是空的，請先新增</div>'; return; }
+  box.innerHTML = list.map(n=>`<span class="chip" draggable="false" style="background:${isDefaultNurse(curOrg,n)?'#C8E6C9':'#FFF59D'};cursor:default;">${n}<span class="x" onclick="removeNurseFromMgr('${n}')">✕</span></span>`).join("")
+    + `<div style="font-size:11px;color:var(--muted);margin-top:6px;">🟩 預設　🟨 自行新增</div>`;
+}
+function addNurseFromMgr(){
+  const el=document.getElementById('nurseMgrInput');
+  const name=(el.value||'').trim();
+  if(!name){ toast("請輸入姓名"); return; }
+  if(nurseList(curOrg).includes(name)){ toast(`「${name}」已在名單中`); el.value=""; return; }
+  nurseAdd(curOrg,name); el.value="";
+  saveData(); renderNurseMgr(); syncLeaveNurseSelect(); render();
+  toast(`已新增護理師「${name}」`);
+}
+function removeNurseFromMgr(name){
+  if(!confirm(`確定從名單刪除「${name}」？\n（已排好的班不會被更動，之後可再新增回來）`)) return;
+  nurseDelete(curOrg,name);
+  saveData(); renderNurseMgr(); syncLeaveNurseSelect(); render();
+  toast(`已從名單刪除「${name}」`);
 }
 function editNurse(dateISO, zone, ev){
   hideTipNow();
@@ -1329,10 +1433,14 @@ function editNurse(dateISO, zone, ev){
   const rec = getRec(curOrg, dateISO, zone);
   const cur = rec && rec.nurse ? rec.nurse : "";
   const list = nurseList(curOrg);
+  const onLeave = leaveOn(curOrg, dateISO);      // 當日請假者 → 反灰不可選
   let opts = `<option value="">（清除）</option>` +
-    list.map(n=>`<option value="${n}"${n===cur?" selected":""}>${n}</option>`).join("");
+    list.map(n=>{
+      const lv = onLeave.includes(n);
+      return `<option value="${n}"${n===cur?" selected":""}${lv?" disabled":""}>${n}${lv?"（請假）":""}</option>`;
+    }).join("");
   if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
-  opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">🗂 移除自訂…</option>`;
+  opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">👥 管理名單（新增／刪除）…</option>`;
   td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:78px;background:#fff;color:#4a6da7;">${opts}</select>`;
   const sel = td.querySelector('select');
   sel.addEventListener('click', e=>e.stopPropagation());
@@ -1343,7 +1451,7 @@ function editNurse(dateISO, zone, ev){
       if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; saveData(); }
       render(); return;
     }
-    if(v==="__manage__"){ manageNurses(curOrg); render(); return; }
+    if(v==="__manage__"){ render(); openNurseMgr(); return; }
     ensureCell(curOrg, dateISO, zone).nurse = v;
     saveData(); render();
   });
@@ -1363,6 +1471,98 @@ function editInstQty(dateISO, zone, idx){
   tag.qty = n;
   hideTipNow(); saveData(); render();
   toast(`已設定「${tag.name}」代表 ${n} 人`);
+}
+
+/* ===== 護理師請假 =====
+   儲存在 data.__leave（跟著雲端一起同步，全體共用）：{ivy:{"2026-08-03":["紫群",…]}, tree:{…}} */
+let leaveViewYM = null;      // 請假清單目前檢視的月份
+function leaveStore(){
+  if(!data.__leave || typeof data.__leave!=='object' || Array.isArray(data.__leave)) data.__leave={};
+  for(const o of ['ivy','tree']) if(!data.__leave[o] || typeof data.__leave[o]!=='object') data.__leave[o]={};
+  return data.__leave;
+}
+function leaveOn(org, dateISO){
+  const m=leaveStore()[org]||{};
+  return Array.isArray(m[dateISO]) ? m[dateISO] : [];
+}
+function isOnLeave(org, dateISO, nurse){ return !!nurse && leaveOn(org,dateISO).includes(nurse); }
+function openLeaveModal(){
+  hideTipNow();
+  const sel=document.getElementById('leaveNurse');
+  sel.innerHTML = nurseList(curOrg).map(n=>`<option value="${n}">${n}</option>`).join("");
+  const f=document.getElementById('leaveFrom'), t=document.getElementById('leaveTo');
+  if(!f.value){ const d=toISO(new Date()); f.value=d; t.value=d; }
+  leaveViewYM = curYM;                       // 每次開啟先對齊目前月份
+  document.getElementById('leaveModalTitle').textContent = `🏖 ${ORG_NAME[curOrg]} 護理師請假登記`;
+  renderLeaveList();
+  document.getElementById('leaveModalBg').classList.add('show');
+}
+function closeLeaveModal(){ document.getElementById('leaveModalBg').classList.remove('show'); }
+function navLeaveMonth(dir){
+  let [Y,M]=(leaveViewYM||curYM).split("-").map(Number);
+  M+=dir; if(M===0){M=12;Y--;} if(M===13){M=1;Y++;}
+  leaveViewYM=`${Y}-${String(M).padStart(2,'0')}`;
+  renderLeaveList();
+}
+function renderLeaveList(){
+  const m=leaveStore()[curOrg]||{};
+  if(!leaveViewYM) leaveViewYM = curYM;
+  const all=Object.keys(m).filter(d=>Array.isArray(m[d]) && m[d].length);
+  const days=all.filter(d=>d.startsWith(leaveViewYM)).sort();          // 只列出這個月，避免清單越積越長
+  const [Y,M]=leaveViewYM.split("-").map(Number);
+  const cnt=days.reduce((s,d)=>s+m[d].length,0);
+  const otherCnt=all.reduce((s,d)=>s+m[d].length,0)-cnt;
+  const box=document.getElementById('leaveList');
+  let h=`<div style="display:flex;align-items:center;gap:6px;padding:1px 0 6px;border-bottom:1px solid var(--line);margin-bottom:6px;flex-wrap:wrap;">
+      <button class="btn" style="padding:1px 9px;font-size:12px;" onclick="navLeaveMonth(-1)">◀</button>
+      <b style="font-size:12.5px;color:var(--brand);">${Y}年${M}月</b>
+      <button class="btn" style="padding:1px 9px;font-size:12px;" onclick="navLeaveMonth(1)">▶</button>
+      <span style="font-size:11.5px;color:var(--muted);">本月 ${cnt} 筆${otherCnt?`・其他月份另有 ${otherCnt} 筆`:""}</span>
+    </div>`;
+  if(!days.length){
+    h+='<div class="empty">本月尚無請假登記</div>';
+  }else{
+    h+=days.map(d=>{
+      const wd=WEEK[fromISO(d).getDay()];
+      const chips=m[d].map(nm=>`<span class="chip" draggable="false" style="background:#FFE0B2;cursor:default;">${nm}<span class="x" onclick="removeLeave('${d}','${nm}')">✕</span></span>`).join("");
+      return `<div style="padding:5px 2px;border-bottom:1px dashed #edf0f5;"><b style="font-size:12px;color:var(--brand);">${d}（${wd}）</b><br>${chips}</div>`;
+    }).join("");
+  }
+  box.innerHTML=h;
+}
+function removeLeave(dateISO, nurse){
+  const s=leaveStore();
+  const arr=(s[curOrg][dateISO]||[]).filter(nm=>nm!==nurse);
+  if(arr.length) s[curOrg][dateISO]=arr; else delete s[curOrg][dateISO];
+  saveData(); renderLeaveList(); render();
+  toast(`已取消 ${nurse} 在 ${dateISO} 的請假`);
+}
+function addLeaveFromForm(){
+  const nurse=document.getElementById('leaveNurse').value;
+  const f=document.getElementById('leaveFrom').value, t=document.getElementById('leaveTo').value;
+  if(!nurse){ toast("請先選擇護理師"); return; }
+  if(!f){ toast("請選擇請假起始日期"); return; }
+  let a=fromISO(f), b=t?fromISO(t):a;
+  if(a>b){ const x=a; a=b; b=x; }
+  const s=leaveStore(); const cleared=[]; let added=0;
+  for(let d=new Date(a); d<=b; d=addDays(d,1)){
+    const iso=toISO(d);
+    const arr=s[curOrg][iso]||[];
+    if(!arr.includes(nurse)){ arr.push(nurse); s[curOrg][iso]=arr; added++; }
+    // 衝突處理：自動清空當天已排給他的分區
+    const day=data[curOrg][iso];
+    if(day){
+      for(const z of Object.keys(day)){
+        const rec=normalizeRec(day[z]);
+        if(rec && rec.nurse===nurse){ rec.nurse=""; cleared.push(`${iso} ${z}區`); }
+      }
+    }
+  }
+  leaveViewYM = toISO(a).slice(0,7);          // 跳到剛登記的月份，才看得到
+  saveData(); renderLeaveList(); render();
+  let msg = added ? `已登記 ${nurse} 請假 ${added} 天` : `${nurse} 這些日期原本就已登記請假`;
+  if(cleared.length) msg += `，並自動清空 ${cleared.length} 筆排班（${cleared.slice(0,3).join("、")}${cleared.length>3?"…":""}）`;
+  toast(msg);
 }
 
 /* ===== 護理師每月個案統計 ===== */
@@ -1579,6 +1779,8 @@ document.getElementById('fileInput').addEventListener('change', e=>{
 });
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
 document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.target.id==='nurseModalBg') closeNurseStats(); });
+document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.target.id==='leaveModalBg') closeLeaveModal(); });
+document.getElementById('nurseMgrBg').addEventListener('click', e=>{ if(e.target.id==='nurseMgrBg') closeNurseMgr(); });
 
 /* 啟動 */
 (async ()=>{
@@ -1590,6 +1792,7 @@ document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.targ
   syncYMToSpan();
   initUser();
   await loadData();
+  migrateLocalNurses();   // 舊版存在瀏覽器的自訂名單 → 搬到雲端共用
   render();
   if(hasRemote) setInterval(pollRemote, 45000);  // 每 45 秒自動拉取他人更新
 })();
