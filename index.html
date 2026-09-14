@@ -343,6 +343,9 @@ async function fetchJSON(url, opt){
     if(!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     if(!j || typeof j !== "object") throw new Error("回應格式不正確");
+    /* 後端 v2 用 {ok:false, error, message} 表示「拒絕寫入」（暴跌防呆／版本衝突／忙線）。
+       一定要當成失敗丟出去，否則前端會誤判成同步成功。 */
+    if(j.ok === false) throw new Error(j.message || j.error || "伺服器拒絕寫入");
     return j;
   }catch(e){
     throw new Error(e.name === "AbortError" ? "逾時未回應（" + (FETCH_TIMEOUT/1000) + "秒）" : (e.message || String(e)));
@@ -480,6 +483,52 @@ function saveData(){
     }catch(e){ setStatus("⚠ 儲存失敗"); }
     pendingSave = false;
   }, 500);
+}
+
+/* ===== 增量寫入：只送有異動的日期 =====
+   後端 v2 的 mode:"merge" 只會覆蓋 patch 裡列出的日期，其餘一律不動。
+   匯入 Excel 走這條路 —— 就算前端的 data 有問題，結構上也不可能刪掉沒碰過的天。
+   touched：[[org, dateISO], ...] */
+async function saveMerge(touched){
+  if(!hasRemote){ saveData(); return true; }
+  if(!remoteOK){
+    backupLocal();
+    setStatus("🔒 唯讀模式｜變更只存在本機備份，尚未上傳（連線恢復後按 🔄 同步）");
+    return false;
+  }
+  const patch = {};
+  touched.forEach(function(t){
+    const o=t[0], d=t[1];
+    if(!data[o] || !data[o][d]) return;
+    if(!patch[o]) patch[o] = {};
+    patch[o][d] = data[o][d];
+  });
+  const nDays = Object.keys(patch).reduce((s,o)=>s+Object.keys(patch[o]).length, 0);
+  if(!nDays) return true;
+  pendingSave = true;
+  setStatus(`儲存中…（增量：${nDays} 天）`);
+  backupLocal();
+  try{
+    const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({
+      mode:"merge", patch:patch, user:userName
+    })});
+    if(j.mode !== "merge"){
+      /* 後端還是舊版（沒認得 mode），退回整包覆蓋 */
+      pendingSave = false;
+      toast("共用資料庫尚未更新到支援增量寫入的版本，改用整包上傳");
+      saveData();
+      return true;
+    }
+    lastUpdatedAt = j.updatedAt || Date.now();
+    if(j.days) lastRemoteDays = j.days;
+    markBackupSynced();
+    setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天｜共 ${j.days||"?"} 天｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
+    return true;
+  }catch(e){
+    setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，請按 🔄 同步重試");
+    toast("⚠ 上傳失敗（資料已存本機備份）：" + e.message);
+    return false;
+  }finally{ pendingSave = false; }
 }
 
 /* ===== 自動拉取他人更新 ===== */
@@ -808,6 +857,7 @@ async function applyParsed(results, preMsgs){
   const msgs = Array.isArray(preMsgs) ? preMsgs.slice() : [];
   results = Array.isArray(results) ? results : [results];
   let ok = 0;
+  const touched = [];          // ★ 本次真正寫到的 [org, dateISO]，供增量上傳使用
   if(results.length && hasRemote){
     /* ★ 寫入前一定要先拿到共用資料庫的最新內容當基底。
        以前取不到時只警告、然後照樣往下寫 —— 而那時 data 可能是空的或過期的，
@@ -871,6 +921,7 @@ async function applyParsed(results, preMsgs){
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
       ok++;
+      touched.push([r.org, r.dateISO]);
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
     }catch(e){
@@ -880,7 +931,7 @@ async function applyParsed(results, preMsgs){
   report.innerHTML = msgs.join("<br>");
   report.className = "parse-report" + (ok===0 ? " err" : "");
   report.style.display = "block";
-  if(ok>0){ saveData(); }
+  if(ok>0){ await saveMerge(touched); }      // ★ 只送這幾天，不再整包覆蓋
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.org===curOrg));
   render();
   toast(ok>0 ? `已更新 ${ok} 個檔案的資料` : "沒有成功解析的檔案");
