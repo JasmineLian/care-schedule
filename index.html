@@ -333,7 +333,7 @@ let pendingSave = false;
 let remoteOK = false;
 let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數，用於暴跌防呆
 const BACKUP_KEY = STORE_KEY + "-backup";
-const FETCH_TIMEOUT = 20000;            // Apps Script 冷啟動慢，但不能無限等
+const FETCH_TIMEOUT = 45000;            // Apps Script 忙的時候單一請求可能要 30 秒以上
 
 /* ===== 讀取用網址：要求後端壓縮 =====
    後端回 734KB 未壓縮 JSON 時，script.googleusercontent.com 會間歇回 404
@@ -412,7 +412,21 @@ async function fetchRemote(onProgress){
            total: countDays(j.data) };
 }
 
+/* ★ 請求排隊：同一時間只對 Apps Script 發一個請求。
+   之前沒有排隊時，reconnect / poll / 分段載入的請求會疊在一起，
+   Apps Script 那端排隊處理，每個都被拖慢（實測單段從 2.8 秒變成 85 秒），
+   然後全部逾時 → 又觸發更多重試 → 惡性循環。 */
+let _fetchChain = Promise.resolve();
+function inQueue(fn){
+  const p = _fetchChain.then(fn, fn);
+  _fetchChain = p.then(function(){}, function(){});
+  return p;
+}
+
 async function fetchJSON(url, opt){
+  return inQueue(function(){ return fetchJSONRaw(url, opt); });
+}
+async function fetchJSONRaw(url, opt){
   const ctl = new AbortController();
   const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
   try{
@@ -459,7 +473,7 @@ function scheduleReconnect(){
     }
     setStatus("⏳ 重新連線中…（第 " + tries + " 次，共用資料庫沒有回應）");
     await pollRemote(false);
-  }, 10000);
+  }, 20000);
 }
 function countDays(d){
   if(!d) return 0;
@@ -513,7 +527,7 @@ async function loadData(){
          就會把共用資料庫覆蓋掉。改成：進入唯讀模式，畫面留白，絕不上傳。 */
       remoteOK = false;
       data = { ivy:{}, tree:{} };
-      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）｜10 秒後自動重試");
+      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）｜20 秒後自動重試");
       toast("⚠ 連不上共用資料庫，已進入唯讀模式；會自動重試，也可以按 🔄 同步最新");
       scheduleReconnect();
       return;
@@ -636,7 +650,15 @@ async function saveMerge(touched){
 }
 
 /* ===== 自動拉取他人更新 ===== */
+let _polling = false;
 async function pollRemote(force){
+  /* setInterval 不會等 async callback 跑完，沒有這道鎖就會重疊 */
+  if(_polling) return;
+  _polling = true;
+  try{ return await pollRemoteInner(force); }
+  finally{ _polling = false; }
+}
+async function pollRemoteInner(force){
   if(!hasRemote || pendingSave) return;
   if(document.getElementById('modalBg').classList.contains('show')) return;  // 編輯中不打擾
   if(!force && tipPinned) return;  // 釘選閱讀中不打擾
