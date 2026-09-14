@@ -162,6 +162,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       &nbsp;～&nbsp;<input type="number" id="dayTo" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;日&nbsp;<button onclick="resetRange()" style="font-size:12px;">全月</button>
     </div>
+    <button class="btn" onclick="openLeave()">🏖 請假登記</button>
     <button class="btn" onclick="showNurseStats()">📊 護理師統計</button>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
@@ -206,6 +207,40 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     <div class="acts">
       <button class="btn" onclick="exportNurseCSV()">⬇ 匯出統計 CSV</button>
       <button class="btn primary" onclick="closeNurseStats()">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- 請假登記 Modal -->
+<div class="modal-bg" id="leaveModalBg">
+  <div class="modal">
+    <h3 id="leaveTitle">🏖 請假登記</h3>
+
+    <label>👤 護理師</label>
+    <div id="leaveNursePicker"></div>
+
+    <label>📅 日期範圍（同一天就兩邊填一樣）</label>
+    <div class="custom-row">
+      <input type="date" id="leaveFrom" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">
+      <span style="align-self:center;">～</span>
+      <input type="date" id="leaveTo" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">
+      範圍內的每一天都會登記（含週末）。
+    </div>
+
+    <label>📝 事由（選填）</label>
+    <div class="custom-row">
+      <input type="text" id="leaveNote" placeholder="例：特休、病假、公假" maxlength="20"
+             onkeydown="if(event.key==='Enter')addLeave()">
+      <button class="btn primary" onclick="addLeave()">登記請假</button>
+    </div>
+
+    <label>📋 目前已登記（點 ✕ 取消登記）</label>
+    <div id="leaveList" style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fafbfd;"></div>
+
+    <div class="acts">
+      <button class="btn primary" onclick="closeLeave()">關閉</button>
     </div>
   </div>
 </div>
@@ -315,6 +350,21 @@ let curYM = null;
 let editing = null;
 let tempTags = [];
 let dragInfo = null;
+/* ★ 請假登記：{ ivy:{ "2026-09-20":{ "紫群":"特休" } }, tree:{...} }
+   跟排班資料分開存（後端 leave.json），但夾在 ?index=1 的回應裡一起回來，
+   所以不會多花一次請求（每次請求的固定開銷是 11~36 秒）。 */
+let leaveData = { ivy:{}, tree:{} };
+function leaveOf(org, dateISO){
+  return (leaveData[org] && leaveData[org][dateISO]) || null;
+}
+function isOnLeave(org, dateISO, name){
+  const d = leaveOf(org, dateISO);
+  return !!(d && Object.prototype.hasOwnProperty.call(d, name));
+}
+function leaveNote(org, dateISO, name){
+  const d = leaveOf(org, dateISO);
+  return (d && d[name]) || "";
+}
 
 /* ===== 共用同步設定 =====
    ★ 部署到 GitHub 時：把下面引號內換成你的 Google Apps Script「網頁應用程式」網址
@@ -352,6 +402,31 @@ function markDeleted(org, dateISO){
 function clearDirty(){ dirtyDays.clear(); deletedDays.clear(); }
 let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數，用於暴跌防呆
 const BACKUP_KEY = STORE_KEY + "-backup";
+/* ★ 本機快取：開頁時先把上次看到的資料顯示出來，背景再去拉最新的。
+   實測 Apps Script 連 103 bytes 的請求都要 11~36 秒（平台固定開銷，跟資料量無關），
+   與其讓人盯著空白等，不如先給他看得到東西。
+   快取期間 remoteOK 維持 false ＝ 自動唯讀，不會有人在舊資料上改東西。 */
+const CACHE_KEY = STORE_KEY + "-cache";
+function saveCache(){
+  try{
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      data: data, leave: leaveData, updatedAt: lastUpdatedAt, at: Date.now(), days: countDays(data)
+    }));
+  }catch(e){}
+}
+function loadCache(){
+  try{
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+    return (c && c.data && countDays(c.data)) ? c : null;
+  }catch(e){ return null; }
+}
+function agoText(ts){
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if(s < 60) return s + " 秒前";
+  if(s < 3600) return Math.round(s/60) + " 分鐘前";
+  if(s < 86400) return Math.round(s/3600) + " 小時前";
+  return Math.round(s/86400) + " 天前";
+}
 const FETCH_TIMEOUT = 45000;            // Apps Script 忙的時候單一請求可能要 30 秒以上
 
 /* ===== 讀取用網址：要求後端壓縮 =====
@@ -385,6 +460,7 @@ let remoteSupportsParts = null;      // null=還不知道, true/false
 async function fetchIndex(){
   const j = await fetchJSONRetry(SYNC_URL + "?index=1&t=" + Date.now());
   if(!j.days) throw new Error("索引格式不正確");
+  if(j.leave){ leaveData = { ivy:j.leave.ivy||{}, tree:j.leave.tree||{} }; }
   return j;
 }
 function monthsOf(list){
@@ -545,17 +621,35 @@ function initUser(){
 /* ===== 儲存（雲端共用 → Claude → 本機 三層自動選擇）===== */
 async function loadData(){
   if(hasRemote){
-    setStatus("⏳ 載入共用資料中…（Apps Script 冷啟動可能要 30 秒，請稍候）");
+    /* ★ 先把上次的資料端出來，讓人馬上有東西看；此時仍是唯讀，不能編輯 */
+    const cache = loadCache();
+    let shownFromCache = false;
+    if(cache){
+      data = cache.data;
+      if(cache.leave) leaveData = { ivy:cache.leave.ivy||{}, tree:cache.leave.tree||{} };
+      lastUpdatedAt = cache.updatedAt || 0;
+      remoteOK = false;
+      migrateAll();
+      shownFromCache = true;
+      setStatus("⚡ 先顯示上次的資料（" + agoText(cache.at) + "，" + cache.days +
+                " 天）｜唯讀中，正在取得最新…");
+      try{ render(); }catch(e){}
+    }else{
+      setStatus("⏳ 載入共用資料中…（Apps Script 冷啟動可能要 30 秒，請稍候）");
+    }
     try{
       const j = await fetchRemote(function(done, total){
-        setStatus("⏳ 載入共用資料中…（" + done + " / " + total + " 批）");
+        setStatus((shownFromCache ? "⚡ 上次的資料（唯讀）｜取得最新中…（" : "⏳ 載入共用資料中…（")
+                  + done + " / " + total + " 批）");
       });
       data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
       remoteOK = true;
       lastRemoteDays = countDays(data);
       migrateAll();
+      saveCache();
       setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : "") + `｜${lastRemoteDays} 天`);
+      if(shownFromCache){ try{ render(); }catch(e){} toast("已更新到最新資料，可以編輯了"); }
       offerBackupRecovery();
       return;
     }catch(e){
@@ -563,9 +657,11 @@ async function loadData(){
          看起來像成功，其實 data 已被換成本機舊快照；之後任何一次 saveData()
          就會把共用資料庫覆蓋掉。改成：進入唯讀模式，畫面留白，絕不上傳。 */
       remoteOK = false;
-      data = { ivy:{}, tree:{} };
-      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）｜20 秒後自動重試");
-      toast("⚠ 連不上共用資料庫，已進入唯讀模式；會自動重試，也可以按 🔄 同步最新");
+      if(!shownFromCache){ data = { ivy:{}, tree:{} }; }   // 有快取就讓它留在畫面上
+      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）" +
+                (shownFromCache ? "｜畫面是上次的資料（" + agoText(cache.at) + "）" : "") +
+                "｜20 秒後自動重試");
+      toast("⚠ 連不上共用資料庫，目前唯讀；會自動重試，也可以按 🔄 同步最新");
       scheduleReconnect();
       return;
     }
@@ -608,7 +704,7 @@ function saveDataFull(){
     if(hasRemote){
       if(!remoteOK){
         /* ★ 沒有確認過遠端內容就絕不上傳 */
-        setStatus("🔒 唯讀模式｜變更只存在本機備份，尚未上傳（連線恢復後按 🔄 同步）");
+        setStatus("🔒 唯讀中｜變更只存在本機備份，尚未上傳（等載入完成或按 🔄 同步）");
         toast("⚠ 目前是唯讀模式，變更已存本機備份但未上傳");
         pendingSave = false;
         return;
@@ -660,7 +756,8 @@ async function saveMerge(touched, deletes){
   if(!hasRemote){ saveDataFull(); return true; }
   if(!remoteOK){
     backupLocal();
-    setStatus("🔒 唯讀模式｜變更只存在本機備份，尚未上傳（連線恢復後按 🔄 同步）");
+    setStatus("🔒 唯讀中｜變更只存在本機備份，尚未上傳（等載入完成或按 🔄 同步）");
+    toast("⚠ 資料還在取得最新版本，請稍候再改");
     return false;
   }
   const patch = {};
@@ -688,6 +785,7 @@ async function saveMerge(touched, deletes){
     }
     lastUpdatedAt = j.updatedAt || Date.now();
     if(j.days) lastRemoteDays = j.days;
+    saveCache();
     markBackupSynced();
     setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天` + ((j.deleted||0)?`、刪除 ${j.deleted} 天`:"") +
               `｜共 ${j.days||"?"} 天｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
@@ -734,6 +832,7 @@ async function pollRemoteInner(force){
       lastUpdatedAt = full.updatedAt;
       lastRemoteDays = full.total;
       migrateAll();
+      saveCache();
       render();
       toast(`已同步最新資料${full.user?`（${full.user} 更新）`:""}`);
       setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (full.user?`（${full.user}）`:"") + `｜${lastRemoteDays} 天`);
@@ -1245,7 +1344,12 @@ function render(){
     const wd = WEEK[new Date(Y, M-1, d).getDay()];
     const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
     const today = dateISO===todayISO ? " today" : "";
-    html += `<tr class="${wknd}${today}"><td class="day">${d}</td><td class="wd">${wd}</td>`;
+    const offToday = leaveOf(curOrg, dateISO);
+    const offNames = offToday ? Object.keys(offToday) : [];
+    const offMark = offNames.length
+      ? `<div style="font-size:9.5px;color:#e67e22;font-weight:normal;line-height:1.2;margin-top:1px;" title="${offNames.map(x=>x+(offToday[x]?"・"+offToday[x]:"")).join("、")}">🏖${offNames.length}</div>`
+      : "";
+    html += `<tr class="${wknd}${today}"><td class="day">${d}${offMark}</td><td class="wd">${wd}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
@@ -1267,7 +1371,12 @@ function render(){
       chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
       html += `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`;
       const nurse = info && info.nurse ? info.nurse : "";
-      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurse}</td>`;
+      /* 已排班的人那天登記了請假 → 標紅提醒（不自動清掉，由人決定怎麼調） */
+      const conflict = nurse && isOnLeave(curOrg, dateISO, nurse);
+      const nurseHtml = conflict
+        ? `<span style="color:#c0392b;font-weight:bold;" title="這天已登記請假">${nurse}<br><span style="font-size:10px;">⚠請假</span></span>`
+        : nurse;
+      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurseHtml}</td>`;
       html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
@@ -1615,7 +1724,13 @@ function editNurse(dateISO, zone, ev){
   const cur = rec && rec.nurse ? rec.nurse : "";
   const list = nurseList(curOrg);
   let opts = `<option value="">（清除）</option>` +
-    list.map(n=>`<option value="${n}"${n===cur?" selected":""}>${n}</option>`).join("");
+    list.map(n=>{
+      const off = isOnLeave(curOrg, dateISO, n);
+      const note = off ? leaveNote(curOrg, dateISO, n) : "";
+      const label = off ? `${n}（請假${note?"・"+note:""}）` : n;
+      /* ★ 請假的人：灰字 + disabled，選不到。要排他就先去「🏖 請假」把登記取消 */
+      return `<option value="${n}"${n===cur?" selected":""}${off?" disabled style=\"color:#b0b5bd;\"":""}>${label}</option>`;
+    }).join("");
   if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
   opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">🗂 移除自訂…</option>`;
   td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:78px;background:#fff;color:#4a6da7;">${opts}</select>`;
@@ -1650,6 +1765,174 @@ function editInstQty(dateISO, zone, idx){
   markDirty(curOrg, dateISO);
   hideTipNow(); saveData(); render();
   toast(`已設定「${tag.name}」代表 ${n} 人`);
+}
+
+/* ═══════════ 請假登記 ═══════════
+   資料存在後端 leave.json，用 mode:"leave" 的 add / remove 寫入，
+   多人同時登記不會互相覆蓋。 */
+let leavePickName = "";
+
+function openLeave(){
+  if(hasRemote && !remoteOK){ toast("🔒 資料還在取得最新版本，請稍候再登記"); return; }
+  hideTipNow();
+  leavePickName = "";
+  document.getElementById('leaveTitle').textContent = `🏖 ${ORG_NAME[curOrg]} 請假登記`;
+  const today = new Date().toISOString().slice(0,10);
+  document.getElementById('leaveFrom').value = today;
+  document.getElementById('leaveTo').value = today;
+  document.getElementById('leaveNote').value = "";
+  renderLeavePicker();
+  renderLeaveList();
+  document.getElementById('leaveModalBg').classList.add('show');
+}
+function closeLeave(){ document.getElementById('leaveModalBg').classList.remove('show'); render(); }
+
+function renderLeavePicker(){
+  const list = nurseList(curOrg);
+  document.getElementById('leaveNursePicker').innerHTML = list.map(function(nm){
+    const on = (nm===leavePickName) ? " on" : "";
+    return `<span class="pick${on}" style="background:#dfe6f5" onclick="pickLeaveNurse('${nm}')">${nm}</span>`;
+  }).join("") || `<div style="color:var(--muted);font-size:12.5px;padding:6px;">這個機構還沒有護理師名單</div>`;
+}
+function pickLeaveNurse(nm){
+  leavePickName = (leavePickName===nm) ? "" : nm;
+  renderLeavePicker();
+}
+
+function eachDateInRange(from, to){
+  const out = [];
+  if(!from || !to) return out;
+  let a = new Date(from + "T00:00:00"), b = new Date(to + "T00:00:00");
+  if(isNaN(a) || isNaN(b)) return out;
+  if(a > b){ const t = a; a = b; b = t; }
+  if((b - a) / 86400000 > 120) return out;        // 一次最多 120 天，防手滑
+  for(let d = new Date(a); d <= b; d.setDate(d.getDate()+1)){
+    out.push(new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10));
+  }
+  return out;
+}
+
+/* 登記請假前，先看看那幾天有沒有已經排給這個人的格子 */
+function findLeaveConflicts(org, name, dates){
+  const hits = [];
+  dates.forEach(function(d){
+    const day = data[org][d];
+    if(!day) return;
+    Object.keys(day).forEach(function(z){
+      const rec = normalizeRec(day[z]);
+      if(rec && rec.nurse === name) hits.push({date:d, zone:z});
+    });
+  });
+  return hits;
+}
+
+async function addLeave(){
+  if(!leavePickName){ toast("請先點選一位護理師"); return; }
+  const from = document.getElementById('leaveFrom').value;
+  const to   = document.getElementById('leaveTo').value;
+  const note = document.getElementById('leaveNote').value.trim();
+  const dates = eachDateInRange(from, to);
+  if(!dates.length){ toast("日期範圍不正確（或超過 120 天）"); return; }
+
+  /* ★ 已排班衝突：列出來讓使用者決定，不自動刪 */
+  const hits = findLeaveConflicts(curOrg, leavePickName, dates);
+  let clearThem = false;
+  if(hits.length){
+    const lines = hits.slice(0,12).map(h=>`　${h.date}　${h.zone}區`).join("\n");
+    clearThem = confirm(
+      `${leavePickName} 在這段期間已經被排了 ${hits.length} 格：\n${lines}` +
+      (hits.length>12 ? `\n　…等 ${hits.length} 格` : "") +
+      `\n\n【確定】一併把這幾格的護理師清空（之後再重新指派）\n【取消】保留原本的指派（表格上會標紅提醒）`
+    );
+  }
+
+  const add = dates.map(d=>({date:d, name:leavePickName, note:note}));
+  const ok = await pushLeave({add:add});
+  if(!ok) return;
+
+  if(clearThem){
+    hits.forEach(function(h){
+      const rec = getRec(curOrg, h.date, h.zone);
+      if(rec){ rec.nurse = ""; markDirty(curOrg, h.date); }
+    });
+    saveData();
+  }
+  document.getElementById('leaveNote').value = "";
+  renderLeaveList(); render();
+  toast(`已登記 ${leavePickName} 請假 ${dates.length} 天` + (clearThem?`，並清空 ${hits.length} 格排班`:""));
+}
+
+async function removeLeave(dateISO, name){
+  if(!confirm(`取消 ${name} 在 ${dateISO} 的請假登記？`)) return;
+  const ok = await pushLeave({remove:[{date:dateISO, name:name}]});
+  if(!ok) return;
+  renderLeaveList(); render();
+  toast(`已取消 ${name} ${dateISO} 的請假`);
+}
+
+async function pushLeave(payload){
+  if(hasRemote && !remoteOK){ toast("🔒 目前唯讀，無法登記"); return false; }
+  if(!hasRemote){
+    /* 沒有共用資料庫時只改本機 */
+    (payload.add||[]).forEach(function(x){
+      if(!leaveData[curOrg][x.date]) leaveData[curOrg][x.date] = {};
+      leaveData[curOrg][x.date][x.name] = x.note || "";
+    });
+    (payload.remove||[]).forEach(function(x){
+      if(leaveData[curOrg][x.date]){
+        delete leaveData[curOrg][x.date][x.name];
+        if(!Object.keys(leaveData[curOrg][x.date]).length) delete leaveData[curOrg][x.date];
+      }
+    });
+    return true;
+  }
+  setStatus("儲存請假登記中…");
+  try{
+    const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify(Object.assign(
+      {mode:"leave", org:curOrg, user:userName}, payload))});
+    if(j.mode !== "leave"){
+      toast("共用資料庫尚未更新到支援請假登記的版本（需重新部署 Apps Script）");
+      setStatus("⚠ 後端版本太舊，請假沒有存上去");
+      return false;
+    }
+    if(j.leave) leaveData = { ivy:j.leave.ivy||{}, tree:j.leave.tree||{} };
+    lastUpdatedAt = j.updatedAt || lastUpdatedAt;
+    saveCache();
+    setStatus(`✓ 請假已同步｜目前共 ${j.totalLeave||0} 筆登記｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
+    return true;
+  }catch(e){
+    setStatus("⚠ 請假登記上傳失敗：" + e.message);
+    toast("⚠ 沒有存上去：" + e.message);
+    return false;
+  }
+}
+
+function renderLeaveList(){
+  const lv = leaveData[curOrg] || {};
+  const dates = Object.keys(lv).sort();
+  const box = document.getElementById('leaveList');
+  if(!dates.length){
+    box.innerHTML = `<div style="color:var(--muted);font-size:12.5px;padding:8px;">目前沒有任何請假登記</div>`;
+    return;
+  }
+  /* 依「人」歸類，把連續日期收合起來顯示，一長串比較好讀 */
+  const byName = {};
+  dates.forEach(function(d){
+    Object.keys(lv[d]).forEach(function(nm){
+      if(!byName[nm]) byName[nm] = [];
+      byName[nm].push({date:d, note:lv[d][nm]});
+    });
+  });
+  box.innerHTML = Object.keys(byName).sort().map(function(nm){
+    const items = byName[nm].map(function(x){
+      return `<span class="chip" style="background:#ffe0b2;">${x.date.slice(5)}${x.note?"・"+x.note:""}` +
+             `<span class="x" onclick="removeLeave('${x.date}','${nm}')">✕</span></span>`;
+    }).join("");
+    return `<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px dashed #edf0f5;">` +
+           `<b style="font-size:12.5px;">${nm}</b>` +
+           `<span style="font-size:11px;color:var(--muted);margin-left:6px;">${byName[nm].length} 天</span>` +
+           `<div style="margin-top:2px;">${items}</div></div>`;
+  }).join("");
 }
 
 /* ===== 護理師每月個案統計 ===== */
@@ -1875,6 +2158,7 @@ document.getElementById('restoreInput').addEventListener('change', e=>{
 });
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
 document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.target.id==='nurseModalBg') closeNurseStats(); });
+document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.target.id==='leaveModalBg') closeLeave(); });
 
 /* 啟動 */
 (async ()=>{
