@@ -237,6 +237,15 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     </div>
 
     <label>📋 目前已登記（點 ✕ 取消登記）</label>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+      <div class="month-nav" style="padding:2px 6px;">
+        <button onclick="navLeaveMonth(-1)" title="上個月">◀</button>
+        <div class="month-label" id="leaveMonthLabel" style="min-width:104px;font-size:14px;"></div>
+        <button onclick="navLeaveMonth(1)" title="下個月">▶</button>
+      </div>
+      <button class="btn" id="leaveAllBtn" onclick="toggleLeaveAll()" style="font-size:12px;padding:5px 10px;">全部月份</button>
+      <span class="status" id="leaveCount"></span>
+    </div>
     <div id="leaveList" style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fafbfd;"></div>
 
     <div class="acts">
@@ -1771,11 +1780,15 @@ function editInstQty(dateISO, zone, idx){
    資料存在後端 leave.json，用 mode:"leave" 的 add / remove 寫入，
    多人同時登記不會互相覆蓋。 */
 let leavePickName = "";
+let leaveViewYM = null;      // 「目前已登記」在看哪個月（null = 還沒初始化）
+let leaveViewAll = false;    // true = 不分月份，全部列出
 
 function openLeave(){
   if(hasRemote && !remoteOK){ toast("🔒 資料還在取得最新版本，請稍候再登記"); return; }
   hideTipNow();
   leavePickName = "";
+  leaveViewYM = curYM;          // 預設看目前表格所在的月份
+  leaveViewAll = false;
   document.getElementById('leaveTitle').textContent = `🏖 ${ORG_NAME[curOrg]} 請假登記`;
   const today = new Date().toISOString().slice(0,10);
   document.getElementById('leaveFrom').value = today;
@@ -1797,6 +1810,20 @@ function renderLeavePicker(){
 function pickLeaveNurse(nm){
   leavePickName = (leavePickName===nm) ? "" : nm;
   renderLeavePicker();
+}
+
+function navLeaveMonth(dir){
+  leaveViewAll = false;
+  let [Y,M] = (leaveViewYM || curYM).split("-").map(Number);
+  M += dir;
+  if(M===0){ M=12; Y--; }
+  if(M===13){ M=1; Y++; }
+  leaveViewYM = `${Y}-${String(M).padStart(2,'0')}`;
+  renderLeaveList();
+}
+function toggleLeaveAll(){
+  leaveViewAll = !leaveViewAll;
+  renderLeaveList();
 }
 
 function eachDateInRange(from, to){
@@ -1858,6 +1885,8 @@ async function addLeave(){
     saveData();
   }
   document.getElementById('leaveNote').value = "";
+  leaveViewAll = false;
+  leaveViewYM = dates[0].slice(0,7);      // 跳到剛登記的那個月，看得到結果
   renderLeaveList(); render();
   toast(`已登記 ${leavePickName} 請假 ${dates.length} 天` + (clearThem?`，並清空 ${hits.length} 格排班`:""));
 }
@@ -1909,13 +1938,45 @@ async function pushLeave(payload){
 
 function renderLeaveList(){
   const lv = leaveData[curOrg] || {};
-  const dates = Object.keys(lv).sort();
+  const allDates = Object.keys(lv).sort();
+  if(!leaveViewYM) leaveViewYM = curYM;
+
+  /* 月份標籤與「全部月份」按鈕狀態 */
+  const [Y,M] = leaveViewYM.split("-").map(Number);
+  const lbl = document.getElementById('leaveMonthLabel');
+  const allBtn = document.getElementById('leaveAllBtn');
+  if(lbl) lbl.textContent = leaveViewAll ? "全部" : `${Y}年${M}月`;
+  if(allBtn){
+    allBtn.textContent = leaveViewAll ? "只看單月" : "全部月份";
+    allBtn.classList.toggle('primary', leaveViewAll);
+  }
+
+  /* 只留下要顯示的日期 */
+  const dates = leaveViewAll ? allDates
+                             : allDates.filter(function(d){ return d.slice(0,7) === leaveViewYM; });
+
+  /* 筆數：本月 / 全部 */
+  const cntOf = function(arr){
+    return arr.reduce(function(s,d){ return s + Object.keys(lv[d]||{}).length; }, 0);
+  };
+  const shown = cntOf(dates), total = cntOf(allDates);
+  const cnt = document.getElementById('leaveCount');
+  if(cnt){
+    cnt.textContent = leaveViewAll
+      ? `共 ${total} 筆`
+      : `本月 ${shown} 筆｜全部 ${total} 筆`;
+  }
+
   const box = document.getElementById('leaveList');
   if(!dates.length){
-    box.innerHTML = `<div style="color:var(--muted);font-size:12.5px;padding:8px;">目前沒有任何請假登記</div>`;
+    box.innerHTML = total
+      ? `<div style="color:var(--muted);font-size:12.5px;padding:8px;">` +
+        `${Y}年${M}月沒有請假登記（其他月份還有 ${total} 筆，按「全部月份」或用 ◀ ▶ 切換）</div>`
+      : `<div style="color:var(--muted);font-size:12.5px;padding:8px;">目前沒有任何請假登記</div>`;
     return;
   }
-  /* 依「人」歸類，把連續日期收合起來顯示，一長串比較好讀 */
+
+  /* 依「人」歸類 */
   const byName = {};
   dates.forEach(function(d){
     Object.keys(lv[d]).forEach(function(nm){
@@ -1923,9 +1984,15 @@ function renderLeaveList(){
       byName[nm].push({date:d, note:lv[d][nm]});
     });
   });
+  const WK = ["日","一","二","三","四","五","六"];
   box.innerHTML = Object.keys(byName).sort().map(function(nm){
     const items = byName[nm].map(function(x){
-      return `<span class="chip" style="background:#ffe0b2;">${x.date.slice(5)}${x.note?"・"+x.note:""}` +
+      /* 單月模式只顯示「日(週)」；全部模式才帶上月份，免得看不出是哪個月 */
+      const dd = new Date(x.date + "T00:00:00");
+      const wk = isNaN(dd) ? "" : WK[dd.getDay()];
+      const label = leaveViewAll ? x.date.slice(5) : (+x.date.slice(8)) + "日";
+      return `<span class="chip" style="background:#ffe0b2;" title="${x.date}（週${wk}）${x.note?"・"+x.note:""}">` +
+             `${label}${wk?"("+wk+")":""}${x.note?"・"+x.note:""}` +
              `<span class="x" onclick="removeLeave('${x.date}','${nm}')">✕</span></span>`;
     }).join("");
     return `<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px dashed #edf0f5;">` +
