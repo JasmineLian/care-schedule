@@ -373,17 +373,35 @@ function monthsOf(list){
   (list||[]).forEach(function(d){ m[d.slice(0,7)] = true; });
   return Object.keys(m).sort();
 }
+/* ★ 把月份分批，一次請求抓多個月 =====
+   實測 Apps Script 每次呼叫有 3~10 秒的固定開銷，跟傳多少資料幾乎無關
+   （1 KB 的索引和 67 KB 的分段耗時差不多）。所以「少發幾次請求」比
+   「每次傳少一點」有效得多。
+   伺服器端讀一個月份檔約 0.8 秒，所以一批抓 70 天也才 2~3 秒，離 30 秒門檻很遠。 */
+const MAX_DAYS_PER_REQ = 70;
+function batchMonths(days){
+  const cnt = {};
+  (days||[]).forEach(function(d){ const ym=d.slice(0,7); cnt[ym]=(cnt[ym]||0)+1; });
+  const yms = Object.keys(cnt).sort();
+  const out = []; let cur = [], n = 0;
+  yms.forEach(function(ym){
+    if(cur.length && n + cnt[ym] > MAX_DAYS_PER_REQ){ out.push(cur); cur = []; n = 0; }
+    cur.push(ym); n += cnt[ym];
+  });
+  if(cur.length) out.push(cur);
+  return out;
+}
 /* 回傳 {data, updatedAt, user}；onProgress(已完成, 總數) 用來更新狀態列 */
 async function fetchAllParts(onProgress){
   const idx = await fetchIndex();
   const jobs = [];
   ["ivy","tree"].forEach(function(o){
-    monthsOf(idx.days[o]).forEach(function(ym){ jobs.push([o, ym]); });
+    batchMonths(idx.days[o]).forEach(function(yms){ jobs.push([o, yms]); });
   });
   const out = { ivy:{}, tree:{} };
   for(let i=0; i<jobs.length; i++){
-    const o = jobs[i][0], ym = jobs[i][1];
-    const j = await fetchJSONRetry(SYNC_URL + "?org=" + o + "&ym=" + ym +
+    const o = jobs[i][0], yms = jobs[i][1];
+    const j = await fetchJSONRetry(SYNC_URL + "?org=" + o + "&ym=" + yms.join(",") +
                                    "&t=" + Date.now() + (CAN_GUNZIP ? "&gz=1" : ""));
     Object.assign(out[o], j.part || {});
     if(onProgress) onProgress(i+1, jobs.length);
@@ -511,7 +529,7 @@ async function loadData(){
     setStatus("⏳ 載入共用資料中…（Apps Script 冷啟動可能要 30 秒，請稍候）");
     try{
       const j = await fetchRemote(function(done, total){
-        setStatus("⏳ 載入共用資料中…（" + done + " / " + total + " 段）");
+        setStatus("⏳ 載入共用資料中…（" + done + " / " + total + " 批）");
       });
       data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
@@ -675,7 +693,7 @@ async function pollRemoteInner(force){
         return;
       }
       const full = await fetchAllParts(function(done, total){
-        setStatus("⏳ 取得他人更新中…（" + done + " / " + total + " 段）");
+        setStatus("⏳ 取得他人更新中…（" + done + " / " + total + " 批）");
       });
       data = full.data;
       lastUpdatedAt = full.updatedAt;
@@ -713,7 +731,7 @@ async function manualSync(){
        不能像以前那樣直接用遠端內容蓋掉畫面。 */
     try{
       const j = await fetchRemote(function(done, total){
-        setStatus("⏳ 取得共用資料中…（" + done + " / " + total + " 段）");
+        setStatus("⏳ 取得共用資料中…（" + done + " / " + total + " 批）");
       });
       remoteOK = true;
       lastRemoteDays = countDays(j.data);
@@ -1015,7 +1033,7 @@ async function applyParsed(results, preMsgs){
        現在改成：取不到就整批中止，一個字都不寫。 */
     try{
       const rj = await fetchRemote(function(done, total){
-        report.innerHTML = "⏳ 匯入前先取得共用資料最新內容…（" + done + " / " + total + " 段）";
+        report.innerHTML = "⏳ 匯入前先取得共用資料最新內容…（" + done + " / " + total + " 批）";
         report.className = "parse-report";
         report.style.display = "block";
       });
