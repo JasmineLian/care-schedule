@@ -335,6 +335,83 @@ let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數�
 const BACKUP_KEY = STORE_KEY + "-backup";
 const FETCH_TIMEOUT = 20000;            // Apps Script 冷啟動慢，但不能無限等
 
+/* ===== 讀取用網址：要求後端壓縮 =====
+   後端回 734KB 未壓縮 JSON 時，script.googleusercontent.com 會間歇回 404
+   （Drive 的「很抱歉，目前無法開啟這個檔案」），每次還要等 34~38 秒。
+   加上 ?gz=1 讓後端回 gzip+base64，約剩 1/7，又快又穩。
+   瀏覽器不支援 DecompressionStream 時自動改用未壓縮路徑。 */
+const CAN_GUNZIP = (typeof DecompressionStream === "function");
+function syncGetURL(){
+  return SYNC_URL + "?t=" + Date.now() + (CAN_GUNZIP ? "&gz=1" : "");
+}
+async function gunzipB64(b64){
+  const bytes = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+  const ds = new DecompressionStream("gzip");
+  const w = ds.writable.getWriter(); w.write(bytes); w.close();
+  const rd = ds.readable.getReader();
+  const chunks=[]; let total=0;
+  for(;;){ const {done, value} = await rd.read(); if(done) break; chunks.push(value); total += value.length; }
+  const out = new Uint8Array(total); let off=0;
+  for(const c of chunks){ out.set(c, off); off += c.length; }
+  return JSON.parse(new TextDecoder().decode(out));
+}
+
+/* ===== 分段讀取 =====
+   實測：完整回應 279KB（壓縮後）成功率只有一半 —— Apps Script 把結果交給
+   script.googleusercontent.com 提供，內容一大就間歇回 404。
+   改成先抓「日期索引」（約 1~2KB），再按「機構＋月份」逐段抓，每段只有幾十 KB。
+   後端若是舊版（不支援 ?index=1），自動退回整包抓。 */
+let remoteSupportsParts = null;      // null=還不知道, true/false
+
+async function fetchIndex(){
+  const j = await fetchJSONRetry(SYNC_URL + "?index=1&t=" + Date.now());
+  if(!j.days) throw new Error("索引格式不正確");
+  return j;
+}
+function monthsOf(list){
+  const m = {};
+  (list||[]).forEach(function(d){ m[d.slice(0,7)] = true; });
+  return Object.keys(m).sort();
+}
+/* 回傳 {data, updatedAt, user}；onProgress(已完成, 總數) 用來更新狀態列 */
+async function fetchAllParts(onProgress){
+  const idx = await fetchIndex();
+  const jobs = [];
+  ["ivy","tree"].forEach(function(o){
+    monthsOf(idx.days[o]).forEach(function(ym){ jobs.push([o, ym]); });
+  });
+  const out = { ivy:{}, tree:{} };
+  for(let i=0; i<jobs.length; i++){
+    const o = jobs[i][0], ym = jobs[i][1];
+    const j = await fetchJSONRetry(SYNC_URL + "?org=" + o + "&ym=" + ym +
+                                   "&t=" + Date.now() + (CAN_GUNZIP ? "&gz=1" : ""));
+    Object.assign(out[o], j.part || {});
+    if(onProgress) onProgress(i+1, jobs.length);
+  }
+  const got = Object.keys(out.ivy).length + Object.keys(out.tree).length;
+  if(idx.total && got !== idx.total){
+    throw new Error("分段抓取不完整（索引 " + idx.total + " 天，實際拿到 " + got + " 天）");
+  }
+  return { data: out, updatedAt: idx.updatedAt || 0, user: idx.user || "", total: got };
+}
+/* 統一入口：先試分段，後端不支援就退回整包 */
+async function fetchRemote(onProgress){
+  if(remoteSupportsParts !== false){
+    try{
+      const r = await fetchAllParts(onProgress);
+      remoteSupportsParts = true;
+      return r;
+    }catch(e){
+      if(remoteSupportsParts === true) throw e;   // 已知支援，那就是真的失敗
+      remoteSupportsParts = false;                 // 第一次失敗 → 當作舊版後端
+    }
+  }
+  const j = await fetchJSONRetry(syncGetURL());
+  if(!j.data) throw new Error("回應沒有 data 欄位");
+  return { data:j.data, updatedAt:j.updatedAt || 0, user:j.user || "",
+           total: countDays(j.data) };
+}
+
 async function fetchJSON(url, opt){
   const ctl = new AbortController();
   const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
@@ -346,19 +423,43 @@ async function fetchJSON(url, opt){
     /* 後端 v2 用 {ok:false, error, message} 表示「拒絕寫入」（暴跌防呆／版本衝突／忙線）。
        一定要當成失敗丟出去，否則前端會誤判成同步成功。 */
     if(j.ok === false) throw new Error(j.message || j.error || "伺服器拒絕寫入");
+    if(j.gz) return await gunzipB64(j.gz);      // 後端壓縮過的回應
     return j;
   }catch(e){
     throw new Error(e.name === "AbortError" ? "逾時未回應（" + (FETCH_TIMEOUT/1000) + "秒）" : (e.message || String(e)));
   }finally{ clearTimeout(timer); }
 }
 async function fetchJSONRetry(url, opt, tries){
-  tries = tries || 3;
+  tries = tries || 4;
   let last;
   for(let i=0; i<tries; i++){
     try{ return await fetchJSON(url, opt); }
-    catch(e){ last = e; if(i < tries-1) await new Promise(r=>setTimeout(r, 2000*(i+1))); }
+    catch(e){
+      last = e;
+      /* Apps Script 冷啟動時會間歇回 404／逾時，退避久一點比較容易撐過去 */
+      if(i < tries-1) await new Promise(r=>setTimeout(r, 2000 * Math.pow(2, i)));
+    }
   }
   throw last;
+}
+
+/* 連不上時的自動重連：每 10 秒試一次，接上就停 */
+let reconnectTimer = null;
+function scheduleReconnect(){
+  if(reconnectTimer || !hasRemote) return;
+  let tries = 0;
+  reconnectTimer = setInterval(async function(){
+    tries++;
+    if(remoteOK || tries > 18){ clearInterval(reconnectTimer); reconnectTimer = null; return; }
+    if(hasUnsyncedBackup()){
+      /* 有沒上傳的變更，不能讓自動重連把畫面換掉，交給使用者按 🔄 同步決定 */
+      clearInterval(reconnectTimer); reconnectTimer = null;
+      setStatus("🔒 唯讀模式｜有尚未上傳的變更，請按 🔄 同步最新處理");
+      return;
+    }
+    setStatus("⏳ 重新連線中…（第 " + tries + " 次，共用資料庫沒有回應）");
+    await pollRemote(false);
+  }, 10000);
 }
 function countDays(d){
   if(!d) return 0;
@@ -393,9 +494,11 @@ function initUser(){
 /* ===== 儲存（雲端共用 → Claude → 本機 三層自動選擇）===== */
 async function loadData(){
   if(hasRemote){
+    setStatus("⏳ 載入共用資料中…（Apps Script 冷啟動可能要 30 秒，請稍候）");
     try{
-      const j = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
-      if(!j.data) throw new Error("回應沒有 data 欄位");
+      const j = await fetchRemote(function(done, total){
+        setStatus("⏳ 載入共用資料中…（" + done + " / " + total + " 段）");
+      });
       data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
       remoteOK = true;
@@ -410,8 +513,9 @@ async function loadData(){
          就會把共用資料庫覆蓋掉。改成：進入唯讀模式，畫面留白，絕不上傳。 */
       remoteOK = false;
       data = { ivy:{}, tree:{} };
-      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）");
-      toast("⚠ 連不上共用資料庫，已進入唯讀模式：不會顯示也不會上傳任何資料");
+      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）｜10 秒後自動重試");
+      toast("⚠ 連不上共用資料庫，已進入唯讀模式；會自動重試，也可以按 🔄 同步最新");
+      scheduleReconnect();
       return;
     }
   }
@@ -538,7 +642,29 @@ async function pollRemote(force){
   if(!force && tipPinned) return;  // 釘選閱讀中不打擾
   if(!force && hasUnsyncedBackup()) return;   // ★ 有未上傳的變更，別讓自動輪詢蓋掉
   try{
-    const j = await fetchJSON(SYNC_URL + "?t=" + Date.now());
+    /* 輪詢只抓索引（1~2KB），updatedAt 沒變就什麼都不做 —— 成本極低 */
+    if(remoteSupportsParts !== false){
+      const idx = await fetchIndex();
+      remoteOK = true;
+      remoteSupportsParts = true;
+      lastRemoteDays = idx.total || lastRemoteDays;
+      if(!idx.updatedAt || idx.updatedAt === lastUpdatedAt || (!force && idx.updatedAt <= lastUpdatedAt)){
+        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (idx.user?`（${idx.user}）`:"") + `｜${lastRemoteDays} 天`);
+        return;
+      }
+      const full = await fetchAllParts(function(done, total){
+        setStatus("⏳ 取得他人更新中…（" + done + " / " + total + " 段）");
+      });
+      data = full.data;
+      lastUpdatedAt = full.updatedAt;
+      lastRemoteDays = full.total;
+      migrateAll();
+      render();
+      toast(`已同步最新資料${full.user?`（${full.user} 更新）`:""}`);
+      setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (full.user?`（${full.user}）`:"") + `｜${lastRemoteDays} 天`);
+      return;
+    }
+    const j = await fetchJSON(syncGetURL());
     if(!j.data) throw new Error("回應沒有 data 欄位");
     remoteOK = true;
     lastRemoteDays = countDays(j.data);
@@ -564,8 +690,9 @@ async function manualSync(){
     /* ★ 本機有還沒上傳的變更：先確認遠端可用，再讓使用者決定方向，
        不能像以前那樣直接用遠端內容蓋掉畫面。 */
     try{
-      const j = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
-      if(!j.data) throw new Error("回應沒有 data 欄位");
+      const j = await fetchRemote(function(done, total){
+        setStatus("⏳ 取得共用資料中…（" + done + " / " + total + " 段）");
+      });
       remoteOK = true;
       lastRemoteDays = countDays(j.data);
       const mine = countDays(data), theirs = lastRemoteDays;
@@ -584,6 +711,7 @@ async function manualSync(){
     return;
   }
   await pollRemote(true);
+  if(!remoteOK) scheduleReconnect();
 }
 
 /* ===== 本機備份救援／手動匯出匯入 ===== */
@@ -864,8 +992,11 @@ async function applyParsed(results, preMsgs){
        saveData() 整包覆蓋上去就會把別人的資料洗掉（2026-09-14 實際發生）。
        現在改成：取不到就整批中止，一個字都不寫。 */
     try{
-      const rj = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
-      if(!rj.data) throw new Error("回應沒有 data 欄位");
+      const rj = await fetchRemote(function(done, total){
+        report.innerHTML = "⏳ 匯入前先取得共用資料最新內容…（" + done + " / " + total + " 段）";
+        report.className = "parse-report";
+        report.style.display = "block";
+      });
       data = rj.data;
       lastUpdatedAt = rj.updatedAt || lastUpdatedAt;
       lastRemoteDays = countDays(data);
