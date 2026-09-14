@@ -166,6 +166,9 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
     <button class="btn danger" onclick="clearMonth()">🗑 清除本月(此機構)</button>
     <button class="btn" onclick="manualSync()">🔄 同步最新</button>
+    <button class="btn" onclick="exportBackup()" title="把目前資料存成 JSON 檔">💾 備份</button>
+    <button class="btn" onclick="document.getElementById('restoreInput').click()" title="用 JSON 備份檔還原">📥 還原</button>
+    <input type="file" id="restoreInput" accept=".json" style="display:none">
     <div class="spacer"></div>
     <div class="status" id="saveStatus"></div>
   </div>
@@ -323,6 +326,59 @@ let userName = "";
 let lastUpdatedAt = 0;
 let pendingSave = false;
 
+/* ===== 寫入安全機制 =====
+   remoteOK：是否「確實成功取得過共用資料庫內容」。這是唯一的上傳許可。
+   只要它是 false，就一律不 POST —— 因為此時 data 不可信（可能是空的或過期的），
+   而 saveData() 是整包覆蓋，送上去就會把別人的資料洗掉。 */
+let remoteOK = false;
+let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數，用於暴跌防呆
+const BACKUP_KEY = STORE_KEY + "-backup";
+const FETCH_TIMEOUT = 20000;            // Apps Script 冷啟動慢，但不能無限等
+
+async function fetchJSON(url, opt){
+  const ctl = new AbortController();
+  const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
+  try{
+    const r = await fetch(url, Object.assign({signal:ctl.signal}, opt||{}));
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if(!j || typeof j !== "object") throw new Error("回應格式不正確");
+    return j;
+  }catch(e){
+    throw new Error(e.name === "AbortError" ? "逾時未回應（" + (FETCH_TIMEOUT/1000) + "秒）" : (e.message || String(e)));
+  }finally{ clearTimeout(timer); }
+}
+async function fetchJSONRetry(url, opt, tries){
+  tries = tries || 3;
+  let last;
+  for(let i=0; i<tries; i++){
+    try{ return await fetchJSON(url, opt); }
+    catch(e){ last = e; if(i < tries-1) await new Promise(r=>setTimeout(r, 2000*(i+1))); }
+  }
+  throw last;
+}
+function countDays(d){
+  if(!d) return 0;
+  return Object.keys(d.ivy||{}).length + Object.keys(d.tree||{}).length;
+}
+/* 本機備份：不論有沒有開共用，任何一次變更都先落地，避免只存在記憶體 */
+function backupLocal(){
+  try{ localStorage.setItem(BACKUP_KEY, JSON.stringify({data, savedAt:Date.now(), synced:false})); }catch(e){}
+}
+function markBackupSynced(){
+  try{
+    const b = JSON.parse(localStorage.getItem(BACKUP_KEY)||"null");
+    if(b){ b.synced = true; localStorage.setItem(BACKUP_KEY, JSON.stringify(b)); }
+  }catch(e){}
+}
+function readBackup(){
+  try{ return JSON.parse(localStorage.getItem(BACKUP_KEY)||"null"); }catch(e){ return null; }
+}
+function hasUnsyncedBackup(){
+  const b = readBackup();
+  return !!(b && !b.synced && b.data && countDays(b.data));
+}
+
 function initUser(){
   try{ userName = localStorage.getItem('careone-user') || ""; }catch(e){}
   if(hasRemote && !userName){
@@ -335,14 +391,26 @@ function initUser(){
 async function loadData(){
   if(hasRemote){
     try{
-      const r = await fetch(SYNC_URL + "?t=" + Date.now());
-      const j = await r.json();
-      if(j && j.data) data = j.data;
+      const j = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
+      if(!j.data) throw new Error("回應沒有 data 欄位");
+      data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
+      remoteOK = true;
+      lastRemoteDays = countDays(data);
       migrateAll();
-      setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : ""));
+      setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : "") + `｜${lastRemoteDays} 天`);
+      offerBackupRecovery();
       return;
-    }catch(e){ setStatus("⚠ 無法連線共用資料庫，改用本機模式"); }
+    }catch(e){
+      /* ★ 這裡以前會掉到下面去讀 localStorage，然後顯示「已載入本機資料」，
+         看起來像成功，其實 data 已被換成本機舊快照；之後任何一次 saveData()
+         就會把共用資料庫覆蓋掉。改成：進入唯讀模式，畫面留白，絕不上傳。 */
+      remoteOK = false;
+      data = { ivy:{}, tree:{} };
+      setStatus("🔒 唯讀模式｜無法連線共用資料庫（" + e.message + "）");
+      toast("⚠ 連不上共用資料庫，已進入唯讀模式：不會顯示也不會上傳任何資料");
+      return;
+    }
   }
   if(window.storage && window.storage.get){
     try{
@@ -365,15 +433,36 @@ function saveData(){
   clearTimeout(saveTimer);
   pendingSave = true;
   setStatus("儲存中…");
+  backupLocal();                       // ★ 先落地，任何情況都不會只存在記憶體
   saveTimer=setTimeout(async ()=>{
     const now = new Date().toLocaleTimeString('zh-TW',{hour12:false});
     if(hasRemote){
+      if(!remoteOK){
+        /* ★ 沒有確認過遠端內容就絕不上傳 */
+        setStatus("🔒 唯讀模式｜變更只存在本機備份，尚未上傳（連線恢復後按 🔄 同步）");
+        toast("⚠ 目前是唯讀模式，變更已存本機備份但未上傳");
+        pendingSave = false;
+        return;
+      }
+      const nNow = countDays(data);
+      if(lastRemoteDays >= 5 && nNow < lastRemoteDays * 0.8){
+        /* ★ 暴跌防呆：要上傳的內容比剛讀到的遠端少很多，八成是抓錯或被清空 */
+        if(!confirm(`⚠ 即將上傳的資料只有 ${nNow} 天，但共用資料庫原本有 ${lastRemoteDays} 天。\n\n這會刪掉 ${lastRemoteDays-nNow} 天的資料。確定要上傳嗎？\n（不確定請按取消，資料已留在本機備份）`)){
+          setStatus("已取消上傳｜變更保留在本機備份");
+          pendingSave = false;
+          return;
+        }
+      }
       try{
-        const r = await fetch(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
-        const j = await r.json();
+        const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
         lastUpdatedAt = j.updatedAt || Date.now();
-        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）`);
-      }catch(e){ setStatus("⚠ 同步失敗，請按 🔄 同步重試"); }
+        lastRemoteDays = nNow;
+        markBackupSynced();
+        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）｜${nNow} 天`);
+      }catch(e){
+        setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，請按 🔄 同步重試");
+        toast("⚠ 上傳失敗，但資料已存在本機備份，不會遺失");
+      }
       pendingSave = false;
       return;
     }
@@ -398,25 +487,88 @@ async function pollRemote(force){
   if(!hasRemote || pendingSave) return;
   if(document.getElementById('modalBg').classList.contains('show')) return;  // 編輯中不打擾
   if(!force && tipPinned) return;  // 釘選閱讀中不打擾
+  if(!force && hasUnsyncedBackup()) return;   // ★ 有未上傳的變更，別讓自動輪詢蓋掉
   try{
-    const r = await fetch(SYNC_URL + "?t=" + Date.now());
-    const j = await r.json();
-    if(j && j.updatedAt && (force || j.updatedAt > lastUpdatedAt)){
-      if(j.updatedAt !== lastUpdatedAt){
-        data = j.data || data;
-        lastUpdatedAt = j.updatedAt;
-        migrateAll();
-        render();
-        toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
-      }
-      setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user?`（${j.user}）`:""));
+    const j = await fetchJSON(SYNC_URL + "?t=" + Date.now());
+    if(!j.data) throw new Error("回應沒有 data 欄位");
+    remoteOK = true;
+    lastRemoteDays = countDays(j.data);
+    if(j.updatedAt && j.updatedAt !== lastUpdatedAt && (force || j.updatedAt > lastUpdatedAt)){
+      data = j.data;
+      lastUpdatedAt = j.updatedAt;
+      migrateAll();
+      render();
+      toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
     }
-  }catch(e){}
+    setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user?`（${j.user}）`:"") + `｜${lastRemoteDays} 天`);
+  }catch(e){
+    if(force){
+      setStatus("⚠ 同步失敗：" + e.message + "｜維持唯讀，請勿匯入");
+      toast("⚠ 共用資料庫沒有回應：" + e.message);
+    }
+  }
 }
 async function manualSync(){
   if(!hasRemote){ toast("尚未設定共用資料庫（見 部署教學.md）"); return; }
   setStatus("同步中…");
+  if(hasUnsyncedBackup()){
+    /* ★ 本機有還沒上傳的變更：先確認遠端可用，再讓使用者決定方向，
+       不能像以前那樣直接用遠端內容蓋掉畫面。 */
+    try{
+      const j = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
+      if(!j.data) throw new Error("回應沒有 data 欄位");
+      remoteOK = true;
+      lastRemoteDays = countDays(j.data);
+      const mine = countDays(data), theirs = lastRemoteDays;
+      if(confirm(`連線已恢復。\n\n目前畫面（本機未上傳）：${mine} 天\n共用資料庫：${theirs} 天\n最後更新：${fmtDT(j.updatedAt||0)}${j.user?`（${j.user}）`:""}\n\n【確定】把本機這份上傳，覆蓋共用資料庫\n【取消】改用共用資料庫的內容，放棄本機未上傳的變更`)){
+        saveData();
+      }else{
+        data = j.data; lastUpdatedAt = j.updatedAt || 0; migrateAll();
+        markBackupSynced(); render();
+        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `｜${theirs} 天`);
+        toast("已改用共用資料庫的內容");
+      }
+    }catch(e){
+      setStatus("⚠ 同步失敗：" + e.message + "｜仍為唯讀，變更保留在本機備份");
+      toast("⚠ 還是連不上：" + e.message);
+    }
+    return;
+  }
   await pollRemote(true);
+}
+
+/* ===== 本機備份救援／手動匯出匯入 ===== */
+function offerBackupRecovery(){
+  if(!hasUnsyncedBackup()) return;
+  const b = readBackup();
+  const mine = countDays(b.data), theirs = countDays(data);
+  if(confirm(`偵測到一份「沒有成功上傳」的本機備份：\n　${fmtDT(b.savedAt)}　共 ${mine} 天\n共用資料庫目前：${theirs} 天\n\n【確定】改用這份本機備份（之後可再按 🔄 同步上傳）\n【取消】保留共用資料庫的內容（備份不會刪除）`)){
+    data = b.data; migrateAll(); render();
+    toast("已改用本機備份，確認無誤後請按 🔄 同步上傳");
+  }else{
+    markBackupSynced();
+  }
+}
+function exportBackup(){
+  const payload = {data, updatedAt:lastUpdatedAt, exportedAt:Date.now(), user:userName,
+                   days:{ivy:Object.keys(data.ivy||{}).length, tree:Object.keys(data.tree||{}).length}};
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)],{type:'application/json'}));
+  a.download = `care-schedule-備份_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+  a.click();
+  toast(`已下載備份（常春藤 ${payload.days.ivy} 天、長青樹 ${payload.days.tree} 天）`);
+}
+async function importBackup(file){
+  try{
+    const j = JSON.parse(await file.text());
+    const d = j && j.data ? j.data : j;
+    if(!d || (!d.ivy && !d.tree)) throw new Error("檔案內容不是本系統的備份");
+    const ni = Object.keys(d.ivy||{}).length, nt = Object.keys(d.tree||{}).length;
+    const ci = Object.keys(data.ivy||{}).length, ct = Object.keys(data.tree||{}).length;
+    if(!confirm(`要用這份備份取代目前資料嗎？\n\n備份：常春藤 ${ni} 天、長青樹 ${nt} 天\n目前：常春藤 ${ci} 天、長青樹 ${ct} 天\n\n確定後會寫入共用資料庫（若目前是唯讀模式則只存本機）。`)) return;
+    data = {ivy: d.ivy||{}, tree: d.tree||{}};
+    migrateAll(); render(); saveData();
+  }catch(e){ toast("還原失敗：" + e.message); }
 }
 function setStatus(t){ document.getElementById('saveStatus').textContent=t; }
 function fmtDT(ts){
@@ -657,15 +809,30 @@ async function applyParsed(results, preMsgs){
   results = Array.isArray(results) ? results : [results];
   let ok = 0;
   if(results.length && hasRemote){
-    // 只在「確實取到遠端資料」時才覆蓋 data；取不到就沿用目前畫面的資料，
-    // 不走 loadData() 的本機備援，避免把共用資料換成空的 localStorage 內容。
+    /* ★ 寫入前一定要先拿到共用資料庫的最新內容當基底。
+       以前取不到時只警告、然後照樣往下寫 —— 而那時 data 可能是空的或過期的，
+       saveData() 整包覆蓋上去就會把別人的資料洗掉（2026-09-14 實際發生）。
+       現在改成：取不到就整批中止，一個字都不寫。 */
     try{
-      const rs = await fetch(SYNC_URL + "?t=" + Date.now());
-      const rj = await rs.json();
-      if(rj && rj.data){ data = rj.data; lastUpdatedAt = rj.updatedAt || lastUpdatedAt; migrateAll(); }
-      else throw new Error("回應格式不正確");
+      const rj = await fetchJSONRetry(SYNC_URL + "?t=" + Date.now());
+      if(!rj.data) throw new Error("回應沒有 data 欄位");
+      data = rj.data;
+      lastUpdatedAt = rj.updatedAt || lastUpdatedAt;
+      lastRemoteDays = countDays(data);
+      remoteOK = true;
+      migrateAll();
     }catch(e){
-      msgs.push(`⚠ 無法取得最新共用資料，改以目前畫面的資料為基礎寫入（${e.message}）`);
+      remoteOK = false;
+      report.innerHTML = [].concat(msgs, [
+        `❌ <b>已中止匯入，未寫入任何資料。</b>`,
+        `　無法取得共用資料庫最新內容：${e.message}`,
+        `　（寫入是整包覆蓋，若以不完整的內容為基底上傳，會刪掉其他日期的資料，所以直接中止。）`,
+        `　請稍後按「🔄 同步最新」確認連線恢復後，再匯入一次。`
+      ]).join("<br>");
+      report.className = "parse-report err";
+      report.style.display = "block";
+      toast("⚠ 連不上共用資料庫，已中止匯入（未寫入任何資料）");
+      return 0;
     }
   }
   for(const r of results){
@@ -1298,6 +1465,7 @@ function navMonth(dir){
   render();
 }
 function clearMonth(){
+  if(hasRemote && !remoteOK){ toast("🔒 唯讀模式：連線恢復前不能清除資料"); return; }
   if(!confirm(`確定清除 ${ORG_NAME[curOrg]} ${curYM} 的所有資料？`)) return;
   for(const d of Object.keys(data[curOrg])) if(d.startsWith(curYM)) delete data[curOrg][d];
   saveData(); render(); toast("已清除本月資料");
@@ -1428,6 +1596,10 @@ dz.addEventListener('drop', e=>{
 });
 document.getElementById('fileInput').addEventListener('change', e=>{
   handleFiles([...e.target.files]);
+  e.target.value="";
+});
+document.getElementById('restoreInput').addEventListener('change', e=>{
+  if(e.target.files && e.target.files[0]) importBackup(e.target.files[0]);
   e.target.value="";
 });
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
