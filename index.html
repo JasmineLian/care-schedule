@@ -331,6 +331,25 @@ let pendingSave = false;
    只要它是 false，就一律不 POST —— 因為此時 data 不可信（可能是空的或過期的），
    而 saveData() 是整包覆蓋，送上去就會把別人的資料洗掉。 */
 let remoteOK = false;
+
+/* ★ 異動追蹤：記下「這次動到哪幾天」，存檔時只送那幾天 =====
+   以前手動編輯（拖曳、改人數、指定護理師…）走的是整包覆蓋，有兩個問題：
+   (a) 只要 data 不完整（載入失敗、將來只載當月），存檔就會刪掉沒載入的日期
+   (b) 多人同時用會互相蓋掉 —— 你改 9/15、同事改 9/16，後送的把先送的洗掉
+   改成增量之後，各人只送自己動過的日期，彼此不會踩到。 */
+const dirtyDays = new Set();     // "ivy|2026-09-15"
+const deletedDays = new Set();   // 整天被刪掉的
+function markDirty(org, dateISO){
+  if(!org || !dateISO) return;
+  dirtyDays.add(org + "|" + dateISO);
+  deletedDays.delete(org + "|" + dateISO);
+}
+function markDeleted(org, dateISO){
+  if(!org || !dateISO) return;
+  deletedDays.add(org + "|" + dateISO);
+  dirtyDays.delete(org + "|" + dateISO);
+}
+function clearDirty(){ dirtyDays.clear(); deletedDays.clear(); }
 let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數，用於暴跌防呆
 const BACKUP_KEY = STORE_KEY + "-backup";
 const FETCH_TIMEOUT = 45000;            // Apps Script 忙的時候單一請求可能要 30 秒以上
@@ -568,7 +587,18 @@ async function loadData(){
   }catch(e){ setStatus("（尚無儲存資料，開始使用吧）"); }
 }
 let saveTimer=null;
+/* 存檔入口。有記到異動日期就走增量；沒有（例如整包還原）才走整包覆蓋。 */
 function saveData(){
+  if(hasRemote && (dirtyDays.size || deletedDays.size)){
+    const touched = [...dirtyDays].map(function(k){ return k.split("|"); });
+    const dels = [...deletedDays];
+    clearDirty();
+    saveMerge(touched, dels);
+    return;
+  }
+  saveDataFull();
+}
+function saveDataFull(){
   clearTimeout(saveTimer);
   pendingSave = true;
   setStatus("儲存中…");
@@ -625,8 +655,9 @@ function saveData(){
    後端 v2 的 mode:"merge" 只會覆蓋 patch 裡列出的日期，其餘一律不動。
    匯入 Excel 走這條路 —— 就算前端的 data 有問題，結構上也不可能刪掉沒碰過的天。
    touched：[[org, dateISO], ...] */
-async function saveMerge(touched){
-  if(!hasRemote){ saveData(); return true; }
+async function saveMerge(touched, deletes){
+  deletes = deletes || [];
+  if(!hasRemote){ saveDataFull(); return true; }
   if(!remoteOK){
     backupLocal();
     setStatus("🔒 唯讀模式｜變更只存在本機備份，尚未上傳（連線恢復後按 🔄 同步）");
@@ -639,26 +670,27 @@ async function saveMerge(touched){
     if(!patch[o]) patch[o] = {};
     patch[o][d] = data[o][d];
   });
-  const nDays = Object.keys(patch).reduce((s,o)=>s+Object.keys(patch[o]).length, 0);
+  const nDays = Object.keys(patch).reduce((s,o)=>s+Object.keys(patch[o]).length, 0) + deletes.length;
   if(!nDays) return true;
   pendingSave = true;
   setStatus(`儲存中…（增量：${nDays} 天）`);
   backupLocal();
   try{
     const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({
-      mode:"merge", patch:patch, user:userName
+      mode:"merge", patch:patch, deletes:deletes, user:userName
     })});
     if(j.mode !== "merge"){
       /* 後端還是舊版（沒認得 mode），退回整包覆蓋 */
       pendingSave = false;
       toast("共用資料庫尚未更新到支援增量寫入的版本，改用整包上傳");
-      saveData();
+      saveDataFull();
       return true;
     }
     lastUpdatedAt = j.updatedAt || Date.now();
     if(j.days) lastRemoteDays = j.days;
     markBackupSynced();
-    setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天｜共 ${j.days||"?"} 天｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
+    setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天` + ((j.deleted||0)?`、刪除 ${j.deleted} 天`:"") +
+              `｜共 ${j.days||"?"} 天｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
     return true;
   }catch(e){
     setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，請按 🔄 同步重試");
@@ -668,8 +700,11 @@ async function saveMerge(touched){
 }
 
 /* ===== 自動拉取他人更新 ===== */
+const POLL_MS = 180000;          // 自動輪詢間隔（3 分鐘）
+let lastPollAt = 0;
 let _polling = false;
 async function pollRemote(force){
+  lastPollAt = Date.now();
   /* setInterval 不會等 async callback 跑完，沒有這道鎖就會重疊 */
   if(_polling) return;
   _polling = true;
@@ -737,9 +772,9 @@ async function manualSync(){
       lastRemoteDays = countDays(j.data);
       const mine = countDays(data), theirs = lastRemoteDays;
       if(confirm(`連線已恢復。\n\n目前畫面（本機未上傳）：${mine} 天\n共用資料庫：${theirs} 天\n最後更新：${fmtDT(j.updatedAt||0)}${j.user?`（${j.user}）`:""}\n\n【確定】把本機這份上傳，覆蓋共用資料庫\n【取消】改用共用資料庫的內容，放棄本機未上傳的變更`)){
-        saveData();
+        saveData();   // 有記到異動就走增量，否則整包
       }else{
-        data = j.data; lastUpdatedAt = j.updatedAt || 0; migrateAll();
+        data = j.data; lastUpdatedAt = j.updatedAt || 0; clearDirty(); migrateAll();
         markBackupSynced(); render();
         setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `｜${theirs} 天`);
         toast("已改用共用資料庫的內容");
@@ -760,7 +795,7 @@ function offerBackupRecovery(){
   const b = readBackup();
   const mine = countDays(b.data), theirs = countDays(data);
   if(confirm(`偵測到一份「沒有成功上傳」的本機備份：\n　${fmtDT(b.savedAt)}　共 ${mine} 天\n共用資料庫目前：${theirs} 天\n\n【確定】改用這份本機備份（之後可再按 🔄 同步上傳）\n【取消】保留共用資料庫的內容（備份不會刪除）`)){
-    data = b.data; migrateAll(); render();
+    data = b.data; clearDirty(); migrateAll(); render();
     toast("已改用本機備份，確認無誤後請按 🔄 同步上傳");
   }else{
     markBackupSynced();
@@ -784,7 +819,8 @@ async function importBackup(file){
     const ci = Object.keys(data.ivy||{}).length, ct = Object.keys(data.tree||{}).length;
     if(!confirm(`要用這份備份取代目前資料嗎？\n\n備份：常春藤 ${ni} 天、長青樹 ${nt} 天\n目前：常春藤 ${ci} 天、長青樹 ${ct} 天\n\n確定後會寫入共用資料庫（若目前是唯讀模式則只存本機）。`)) return;
     data = {ivy: d.ivy||{}, tree: d.tree||{}};
-    migrateAll(); render(); saveData();
+    clearDirty();                    // 整包還原：走整包覆蓋，不是增量
+    migrateAll(); render(); saveDataFull();
   }catch(e){ toast("還原失敗：" + e.message); }
 }
 function setStatus(t){ document.getElementById('saveStatus').textContent=t; }
@@ -1102,7 +1138,7 @@ async function applyParsed(results, preMsgs){
   report.innerHTML = msgs.join("<br>");
   report.className = "parse-report" + (ok===0 ? " err" : "");
   report.style.display = "block";
-  if(ok>0){ await saveMerge(touched); }      // ★ 只送這幾天，不再整包覆蓋
+  if(ok>0){ clearDirty(); await saveMerge(touched, []); }   // ★ 只送這幾天，不再整包覆蓋
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.org===curOrg));
   render();
   toast(ok>0 ? `已更新 ${ok} 個檔案的資料` : "沒有成功解析的檔案");
@@ -1303,6 +1339,7 @@ function dropChip(ev){
     if(!dtag){ dtag = {name:tag.name, people:[]}; dst.tags.push(dtag); }
     dtag.people.push(person);
     dst.count = (dst.count||0) + 1;
+    markDirty(curOrg, srcDate); markDirty(curOrg, dstDate);
     hideTipNow(); saveData(); render();
     toast(`已將 ${person.name}（${tag.name}）移到 ${dstZone}區`);
     return;
@@ -1321,6 +1358,7 @@ function dropChip(ev){
   const dst = ensureCell(curOrg, dstDate, dstZone);
   dst.tags.push(tag);
   if(n) dst.count = (dst.count||0) + n;
+  markDirty(curOrg, srcDate); markDirty(curOrg, dstDate);
   saveData(); render();
   toast(`已將「${tag.name}」移到 ${dstZone}區${n?`（含 ${n} 人，獨立標籤）`:""}`);
 }
@@ -1357,6 +1395,7 @@ function chipDrop(ev, dstDate, dstZone, dstIdx){
     }
     if(!sameCell){ src.count=Math.max(0,(src.count||0)-1); dst.count=(dst.count||0)+1; }
     dst.tags[dIdx].people.push(person);
+    markDirty(curOrg, sd); markDirty(curOrg, dstDate);
     hideTipNow(); saveData(); render();
     toast(`已將 ${person.name} 併入「${dst.tags[dIdx].name}」`);
     return;
@@ -1378,6 +1417,7 @@ function chipDrop(ev, dstDate, dstZone, dstIdx){
   const n = stag.people ? stag.people.length : 0;
   dtag.people = (dtag.people||[]).concat(stag.people||[]);
   if(!sameCell && n){ src.count=Math.max(0,(src.count||0)-n); dst.count=(dst.count||0)+n; }
+  markDirty(curOrg, sd); markDirty(curOrg, dstDate);
   saveData(); render();
   toast(`已合併成「${dtag.name}(${dtag.people.length})」大群標籤，釘選後可再勾選拆分`);
 }
@@ -1444,6 +1484,7 @@ function splitSelected(){
   const moved = idxs.map(i=>tag.people[i]);
   [...idxs].reverse().forEach(i=>tag.people.splice(i,1));
   rec.tags.splice(tipCtx.idx+1, 0, {name:tag.name, people:moved});
+  markDirty(curOrg, tipCtx.dateISO);
   hideTipNow(); saveData(); render();
   toast(`已拆分出「${tag.name}(${moved.length})」小標籤，可直接拖曳搬區`);
 }
@@ -1524,6 +1565,7 @@ function quickRemove(ev, dateISO, zone, idx){
   const ppl = tag.people ? tag.people.length : 0;
   if(ppl && !confirm(`「${tag.name}」含 ${ppl} 筆個案資料，確定移除？（人數不會自動變更）`)) return;
   rec.tags.splice(idx, 1);
+  markDirty(curOrg, dateISO);
   saveData(); render();
   toast(`已移除 ${tag.name}`);
 }
@@ -1583,11 +1625,12 @@ function editNurse(dateISO, zone, ev){
     const v = sel.value;
     if(v==="__add__"){
       const name=addNurse(curOrg);
-      if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; saveData(); }
+      if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; markDirty(curOrg, dateISO); saveData(); }
       render(); return;
     }
     if(v==="__manage__"){ manageNurses(curOrg); render(); return; }
     ensureCell(curOrg, dateISO, zone).nurse = v;
+    markDirty(curOrg, dateISO);
     saveData(); render();
   });
   sel.addEventListener('blur', ()=>render());
@@ -1604,6 +1647,7 @@ function editInstQty(dateISO, zone, idx){
   const n = parseInt(v, 10);
   if(isNaN(n) || n<0){ toast("請輸入 0 或正整數"); return; }
   tag.qty = n;
+  markDirty(curOrg, dateISO);
   hideTipNow(); saveData(); render();
   toast(`已設定「${tag.name}」代表 ${n} 人`);
 }
@@ -1689,7 +1733,7 @@ function navMonth(dir){
 function clearMonth(){
   if(hasRemote && !remoteOK){ toast("🔒 唯讀模式：連線恢復前不能清除資料"); return; }
   if(!confirm(`確定清除 ${ORG_NAME[curOrg]} ${curYM} 的所有資料？`)) return;
-  for(const d of Object.keys(data[curOrg])) if(d.startsWith(curYM)) delete data[curOrg][d];
+  for(const d of Object.keys(data[curOrg])) if(d.startsWith(curYM)){ markDeleted(curOrg, d); delete data[curOrg][d]; }
   saveData(); render(); toast("已清除本月資料");
 }
 
@@ -1761,12 +1805,17 @@ function saveCell(){
     tags: tempTags.map(t=>{ const o={name:t.name, people:t.people||[]}; if(t.qty!=null && t.qty!=="") o.qty=+t.qty; if(t.isInst) o.isInst=true; return o; }),
     nurse: rec0 && rec0.nurse ? rec0.nurse : ""
   };
+  markDirty(editing.org, editing.dateISO);
   saveData(); closeModal(); render(); toast("已更新");
 }
 function deleteCell(){
   if(!editing) return;
   const rec = data[editing.org][editing.dateISO];
-  if(rec){ delete rec[editing.zone]; if(Object.keys(rec).length===0) delete data[editing.org][editing.dateISO]; }
+  if(rec){
+    delete rec[editing.zone];
+    if(Object.keys(rec).length===0){ delete data[editing.org][editing.dateISO]; markDeleted(editing.org, editing.dateISO); }
+    else markDirty(editing.org, editing.dateISO);
+  }
   saveData(); closeModal(); render(); toast("已刪除");
 }
 
@@ -1834,7 +1883,17 @@ document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.targ
   initUser();
   await loadData();
   render();
-  if(hasRemote) setInterval(pollRemote, 45000);  // 每 45 秒自動拉取他人更新
+  if(hasRemote){
+    /* ★ 輪詢成本：Apps Script 消費者帳號每天只有 90 分鐘指令碼執行時間。
+       原本每 45 秒一次，一個人開 8 小時就是 640 次（約 21 分鐘），
+       四個人同時開著幾乎就把配額用光 —— 而且大家常常「開著沒在看」。
+       改成 3 分鐘一次，而且分頁切到背景就完全不輪詢。 */
+    setInterval(function(){ if(!document.hidden) pollRemote(); }, POLL_MS);
+    document.addEventListener('visibilitychange', function(){
+      // 切回前台時補抓一次，但距離上次不到 30 秒就不重複打
+      if(!document.hidden && Date.now() - lastPollAt > 30000) pollRemote();
+    });
+  }
 })();
 </script>
 </body>
