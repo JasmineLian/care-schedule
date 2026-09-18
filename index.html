@@ -226,7 +226,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 </div>
 
 <!-- 護理師名單管理 Modal -->
-<div class="modal-bg" id="nurseMgrBg">
+<div class="modal-bg" id="nurseMgrBg" style="z-index:60;">
   <div class="modal">
     <h3 id="nurseMgrTitle">👥 護理師名單管理</h3>
     <label>➕ 新增護理師</label>
@@ -246,7 +246,10 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="modal">
     <h3 id="leaveTitle">🏖 請假登記</h3>
 
-    <label>👤 護理師</label>
+    <label>👤 護理師
+      <button class="btn" onclick="openNurseMgr()" title="新增或刪除護理師，改完這裡會立刻更新"
+              style="font-weight:normal;font-size:11.5px;padding:2px 9px;margin-left:6px;">👥 管理名單</button>
+    </label>
     <div id="leaveNursePicker"></div>
 
     <label>📅 日期範圍（同一天就兩邊填一樣）</label>
@@ -2079,6 +2082,7 @@ function closeLeave(){ document.getElementById('leaveModalBg').classList.remove(
 
 function renderLeavePicker(){
   const list = nurseList(curOrg);
+  if(leavePickName && !list.includes(leavePickName)) leavePickName = "";   // 已從名單移除 → 取消選取
   document.getElementById('leaveNursePicker').innerHTML = list.map(function(nm){
     const on = (nm===leavePickName) ? " on" : "";
     return `<span class="pick${on}" style="background:#dfe6f5" onclick="pickLeaveNurse('${nm}')">${nm}</span>`;
