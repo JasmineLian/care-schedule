@@ -50,12 +50,14 @@ table{border-collapse:collapse; width:100%; font-size:13px; min-width:900px;}
 th,td{border:1px solid var(--line); padding:5px 7px; text-align:center; vertical-align:middle;}
 thead th{background:var(--brand); color:#fff; position:sticky; top:0; z-index:2; font-size:13px; box-shadow:0 2px 4px rgba(0,0,0,.15);}
 thead th.zone{background:var(--brand2);}
-td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd;}
+td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd; white-space:nowrap;}
+tr.msep td{background:#dfe4ee !important; color:var(--brand); font-weight:bold; text-align:left; font-size:12.5px; padding:4px 10px; letter-spacing:.5px;}
 tr.wknd td{background:#f1f2f6;}
 tr.wknd td.day,tr.wknd td.wd{background:#e8eaf0;}
 td.cnt{width:56px; font-weight:bold; font-size:14px; cursor:pointer;}
 td.nurse{width:72px; cursor:pointer; color:#4a6da7; font-size:12.5px;}
 td.nurse:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
+td.nurse.overload{background:#fff4e5;}
 th.nursehd{font-size:12px;}
 td.cnt:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
 td.dists{text-align:left; min-width:200px;}
@@ -152,16 +154,28 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="parse-report" id="parseReport"></div>
 
   <div class="toolbar">
-    <div class="month-nav">
+    <div class="month-nav" id="monthNav">
       <button onclick="navMonth(-1)">◀</button>
       <div class="month-label" id="monthLabel"></div>
       <button onclick="navMonth(1)">▶</button>
     </div>
-    <div class="month-nav" title="只顯示這個範圍的日期">
+    <div class="month-nav" id="dayRangeBox" title="只顯示這個範圍的日期">
       顯示&nbsp;<input type="number" id="dayFrom" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;～&nbsp;<input type="number" id="dayTo" min="1" max="31" style="width:54px;padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;" onchange="render()">
       &nbsp;日&nbsp;<button onclick="resetRange()" style="font-size:12px;">全月</button>
     </div>
+    <div class="month-nav" id="spanBox" style="display:none;" title="跨月區間：可自由選擇起訖日期，橫跨任意月份">
+      <button onclick="shiftSpan(-1)" title="往前平移一個區間長度">◀</button>
+      <input type="date" id="spanFrom" style="padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:12.5px;" onchange="onSpanChange()">
+      &nbsp;～&nbsp;
+      <input type="date" id="spanTo" style="padding:4px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:12.5px;" onchange="onSpanChange()">
+      <button onclick="shiftSpan(1)" title="往後平移一個區間長度">▶</button>
+      <span style="font-size:11px;color:var(--muted);" id="spanInfo"></span>
+      <button onclick="spanPreset(7)" style="font-size:12px;">7天</button>
+      <button onclick="spanPreset(14)" style="font-size:12px;">14天</button>
+      <button onclick="spanPreset(30)" style="font-size:12px;">30天</button>
+    </div>
+    <button class="btn" id="spanToggle" onclick="toggleSpanMode()">📅 跨月區間</button>
     <button class="btn" onclick="openLeave()">🏖 請假登記</button>
     <button class="btn" onclick="showNurseStats()">📊 護理師統計</button>
     <button class="btn" onclick="exportCSV()">⬇ 匯出 CSV</button>
@@ -208,6 +222,22 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       <button class="btn" onclick="exportNurseCSV()">⬇ 匯出統計 CSV</button>
       <button class="btn primary" onclick="closeNurseStats()">關閉</button>
     </div>
+  </div>
+</div>
+
+<!-- 護理師名單管理 Modal -->
+<div class="modal-bg" id="nurseMgrBg">
+  <div class="modal">
+    <h3 id="nurseMgrTitle">👥 護理師名單管理</h3>
+    <label>➕ 新增護理師</label>
+    <div class="custom-row">
+      <input type="text" id="nurseMgrInput" placeholder="輸入姓名後按新增" onkeydown="if(event.key==='Enter')addNurseFromMgr()">
+      <button class="btn" onclick="addNurseFromMgr()">新增</button>
+    </div>
+    <label>📋 目前名單（點 ✕ 刪除，預設與自訂都可刪）</label>
+    <div class="selected-area" id="nurseMgrList" style="max-height:240px;overflow:auto;"></div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">刪除只是從選單移除，已排好的班不會被更動；刪掉的預設護理師可用上面「新增」加回來。</div>
+    <div class="acts"><button class="btn primary" onclick="closeNurseMgr()">關閉</button></div>
   </div>
 </div>
 
@@ -348,6 +378,7 @@ function zoneCount(rec){
   return (rec.count||0) + extra;
 }
 const WEEK = ["日","一","二","三","四","五","六"];
+const CASE_LIMIT = 95;   // 每位護理師每月案量上限：達到即標紅提醒（要改門檻改這裡）
 const STORE_KEY = "careone-schedule-v1";
 const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差","清寒","福保重大"]);
 const NOTE_SKIP = new Set(["費用","備註","說明","診斷","預計","收費","實際申報","電話","地址","更換管路","傷口","移除","住院","舊案","VPN","工作人員：","耗材：","小計：","部分負擔：","，支出："]);
@@ -359,10 +390,15 @@ let curYM = null;
 let editing = null;
 let tempTags = [];
 let dragInfo = null;
+let spanMode = false;          // true＝跨月區間模式（自由起訖日期）
 /* ★ 請假登記：{ ivy:{ "2026-09-20":{ "紫群":"特休" } }, tree:{...} }
    跟排班資料分開存（後端 leave.json），但夾在 ?index=1 的回應裡一起回來，
    所以不會多花一次請求（每次請求的固定開銷是 11~36 秒）。 */
 let leaveData = { ivy:{}, tree:{} };
+/* ★ 護理師名單：{ivy:{add:[],del:[]}, tree:{...}}，存後端 careone-nurses.json。
+   後端若尚未支援（回應沒有 nurses），nursesRemote 保持 false → 自動退回本機儲存。 */
+let nurseData = { ivy:{add:[],del:[]}, tree:{add:[],del:[]} };
+let nursesRemote = false;
 function leaveOf(org, dateISO){
   return (leaveData[org] && leaveData[org][dateISO]) || null;
 }
@@ -470,6 +506,10 @@ async function fetchIndex(){
   const j = await fetchJSONRetry(SYNC_URL + "?index=1&t=" + Date.now());
   if(!j.days) throw new Error("索引格式不正確");
   if(j.leave){ leaveData = { ivy:j.leave.ivy||{}, tree:j.leave.tree||{} }; }
+  if(j.nurses){                       // 後端已支援名單同步
+    nurseData = normNurseData(j.nurses);
+    nursesRemote = true;
+  }
   return j;
 }
 function monthsOf(list){
@@ -1239,6 +1279,7 @@ async function applyParsed(results, preMsgs){
       touched.push([r.org, r.dateISO]);
       curOrg = r.org;
       curYM = r.dateISO.slice(0,7);
+      ensureDateVisible(r.dateISO);   // 跨月模式：自動延伸區間到剛上傳的日期
     }catch(e){
       msgs.push(`❌ ${fname}【來源：${src}】：套用錯誤 ${e.message}`);
     }
@@ -1269,6 +1310,106 @@ async function handleFiles(files){
 }
 
 /* ===== 表格 ===== */
+/* ===== 跨月區間 ===== */
+const SPAN_MAX_DAYS = 120;
+function toISO(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function fromISO(s){ const [y,m,d]=String(s).split('-').map(Number); return new Date(y, m-1, d); }
+function addDays(d, n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+function viewDates(){
+  if(spanMode){
+    const sf=document.getElementById('spanFrom').value, st=document.getElementById('spanTo').value;
+    if(!sf || !st) return [];
+    let a=fromISO(sf), b=fromISO(st);
+    if(a>b){ const tmp=a; a=b; b=tmp; }
+    const out=[];
+    for(let d=new Date(a); d<=b && out.length<SPAN_MAX_DAYS; d=addDays(d,1)) out.push(toISO(d));
+    return out;
+  }
+  const [Y,M] = curYM.split("-").map(Number);
+  const days = new Date(Y, M, 0).getDate();
+  let f = parseInt(document.getElementById('dayFrom').value);
+  let t = parseInt(document.getElementById('dayTo').value);
+  if(!f && !t){
+    const now = new Date();
+    const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
+    f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
+    t = f + 4;
+  }else{ f = f||1; t = t||days; }
+  f = Math.max(1, Math.min(f, days));
+  t = Math.max(f, Math.min(t, days));
+  const out=[];
+  for(let d=f; d<=t; d++) out.push(`${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+  return out;
+}
+function applyModeUI(){
+  document.getElementById('monthNav').style.display    = spanMode ? "none" : "";
+  document.getElementById('dayRangeBox').style.display = spanMode ? "none" : "";
+  document.getElementById('spanBox').style.display     = spanMode ? "" : "none";
+  const b=document.getElementById('spanToggle');
+  b.textContent = spanMode ? "📆 回月份模式" : "📅 跨月區間";
+  b.classList.toggle('primary', spanMode);
+}
+function defaultSpan(){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(sf.value && st.value) return;
+  const now=new Date(); const [Y,M]=curYM.split("-").map(Number);
+  const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
+  const start = isCur ? now : new Date(Y, M-1, 1);
+  sf.value = toISO(start); st.value = toISO(addDays(start, 13));
+}
+function toggleSpanMode(){
+  spanMode = !spanMode;
+  if(spanMode) defaultSpan();
+  try{ localStorage.setItem('careone-spanmode', spanMode?'1':'0'); }catch(e){}
+  applyModeUI(); syncYMToSpan(); render();
+}
+function onSpanChange(){ syncYMToSpan(); render(); }
+function syncYMToSpan(){
+  if(!spanMode) return;
+  const sf=document.getElementById('spanFrom').value;
+  if(sf) curYM = sf.slice(0,7);
+}
+function ensureDateVisible(dateISO){
+  if(!spanMode || !dateISO) return;
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value || !st.value){ defaultSpan(); }
+  let a=fromISO(sf.value), b=fromISO(st.value);
+  if(a>b){ const t=a; a=b; b=t; }
+  const d=fromISO(dateISO);
+  if(d<a) sf.value=dateISO; else if(d>b) st.value=dateISO;
+  else { sf.value=toISO(a); st.value=toISO(b); }
+  syncYMToSpan();
+}
+function shiftSpan(dir){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value || !st.value){ defaultSpan(); }
+  let a=fromISO(sf.value), b=fromISO(st.value);
+  if(a>b){ const t=a; a=b; b=t; }
+  const len=Math.round((b-a)/86400000)+1;
+  sf.value=toISO(addDays(a, dir*len)); st.value=toISO(addDays(b, dir*len));
+  onSpanChange();
+}
+function spanPreset(n){
+  const sf=document.getElementById('spanFrom'), st=document.getElementById('spanTo');
+  if(!sf.value) sf.value=toISO(new Date());
+  st.value=toISO(addDays(fromISO(sf.value), n-1));
+  onSpanChange();
+}
+function sortZones(org, set){
+  const ord = zoneOrder(org);
+  return [...set].sort((a,b)=>{
+    const ia=ord.indexOf(a), ib=ord.indexOf(b);
+    if(ia>=0 && ib>=0) return ia-ib;
+    if(ia>=0) return -1;
+    if(ib>=0) return 1;
+    return a<b?-1:(a>b?1:0);
+  });
+}
+function zonesForDates(org, dates){
+  const set = new Set(DEFAULT_ZONES[org]);
+  for(const d of dates){ const zs=data[org][d]; if(zs) Object.keys(zs).forEach(z=>set.add(z)); }
+  return sortZones(org, set);
+}
 function zonesForMonth(org, ym){
   const set = new Set(DEFAULT_ZONES[org]);
   for(const [d, zs] of Object.entries(data[org])){
@@ -1299,7 +1440,7 @@ function zoneDrop(ev, target){
   ev.preventDefault(); ev.currentTarget.classList.remove('dropover');
   const src=zoneDragName; zoneDragName=null;
   if(!src || src===target) return;
-  const arr=zonesForMonth(curOrg, curYM).filter(z=>z!==src);
+  const arr=zonesForDates(curOrg, viewDates()).filter(z=>z!==src);
   arr.splice(arr.indexOf(target), 0, src);
   saveZoneOrder(arr); render();
   toast(`已將 ${src}區 移到 ${target}區 前面`);
@@ -1320,8 +1461,16 @@ function render(){
   hideTipNow();
   const [Y,M] = curYM.split("-").map(Number);
   document.getElementById('monthLabel').textContent = `${Y}年${M}月`;
-  const days = new Date(Y, M, 0).getDate();
-  const allZones = zonesForMonth(curOrg, curYM);
+  const dates = viewDates();                       // 跨月模式可橫跨多個月份
+  const months = [...new Set(dates.map(d=>d.slice(0,7)))];
+  const crossMonth = months.length > 1;
+  if(spanMode){
+    const info=document.getElementById('spanInfo');
+    if(info) info.textContent = dates.length
+      ? `共 ${dates.length} 天${crossMonth?`（跨 ${months.length} 個月）`:""}${dates.length>=SPAN_MAX_DAYS?`・上限 ${SPAN_MAX_DAYS} 天`:""}`
+      : "請選擇起訖日期";
+  }
+  const allZones = zonesForDates(curOrg, dates);
   const hid = hiddenZones();
   const zones = allZones.filter(z=>!hid.has(z));
   document.getElementById('zoneBar').innerHTML = '<b>顯示區域：</b>' +
@@ -1332,33 +1481,33 @@ function render(){
     `<span class="zchip all" onclick="showAllZones()">全部顯示</span>
      <span style="font-size:11px;color:var(--muted);">（拖曳晶片可調整欄位左右順序）</span>`;
   const todayISO = new Date().toISOString().slice(0,10);
+  const loadCache = {};                            // 各月案量，每月只算一次
+  const loadOf = ym => loadCache[ym] || (loadCache[ym] = nurseLoadMap(curOrg, ym));
 
-  let html = "<thead><tr><th>日</th><th>週</th>";
+  let html = "<thead><tr><th>" + (crossMonth ? "月/日" : "日") + "</th><th>週</th>";
   for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${z}區 行政區</th>`;
   html += "</tr></thead><tbody>";
 
-  let f = parseInt(document.getElementById('dayFrom').value);
-  let t = parseInt(document.getElementById('dayTo').value);
-  if(!f && !t){
-    // 預設固定顯示 5 日：本月從今天起、其他月份從 1 號起（按「全月」可看整月）
-    const now = new Date();
-    const isCur = now.getFullYear()===Y && (now.getMonth()+1)===M;
-    f = isCur ? Math.min(now.getDate(), Math.max(1, days-4)) : 1;
-    t = f + 4;
-  }else{ f = f||1; t = t||days; }
-  f = Math.max(1, Math.min(f, days));
-  t = Math.max(f, Math.min(t, days));
-  for(let d=f; d<=t; d++){
-    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+  const colSpanAll = 2 + zones.length*3;
+  let prevYM = null;
+  for(const dateISO of dates){
+    const dt = fromISO(dateISO);
+    const d = dt.getDate(), ymRow = dateISO.slice(0,7);
+    if(crossMonth && ymRow!==prevYM){
+      const [yy,mm] = ymRow.split("-").map(Number);
+      html += `<tr class="msep"><td colspan="${colSpanAll}">${yy} 年 ${mm} 月</td></tr>`;
+    }
+    prevYM = ymRow;
+    const wd = WEEK[dt.getDay()];
     const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
     const today = dateISO===todayISO ? " today" : "";
+    const dayLabel = crossMonth ? `${dt.getMonth()+1}/${d}` : d;
     const offToday = leaveOf(curOrg, dateISO);
     const offNames = offToday ? Object.keys(offToday) : [];
     const offMark = offNames.length
       ? `<div style="font-size:9.5px;color:#e67e22;font-weight:normal;line-height:1.2;margin-top:1px;" title="${offNames.map(x=>x+(offToday[x]?"・"+offToday[x]:"")).join("、")}">🏖${offNames.length}</div>`
       : "";
-    html += `<tr class="${wknd}${today}"><td class="day">${d}${offMark}</td><td class="wd">${wd}</td>`;
+    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}${offMark}</td><td class="wd">${wd}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
@@ -1382,14 +1531,22 @@ function render(){
       const nurse = info && info.nurse ? info.nurse : "";
       /* 已排班的人那天登記了請假 → 標紅提醒（不自動清掉，由人決定怎麼調） */
       const conflict = nurse && isOnLeave(curOrg, dateISO, nurse);
+      /* 沒請假但本月案量已達上限 → 淡橘底提醒（請假優先顯示） */
+      const nLoad = nurse ? (loadOf(ymRow)[nurse]||0) : 0;
+      const over  = !!nurse && !conflict && nLoad>=CASE_LIMIT;
       const nurseHtml = conflict
         ? `<span style="color:#c0392b;font-weight:bold;" title="這天已登記請假">${nurse}<br><span style="font-size:10px;">⚠請假</span></span>`
+        : over
+        ? `<span style="color:#c0392b;font-weight:bold;" title="本月已累積 ${nLoad} 案（上限 ${CASE_LIMIT}）">${nurse}<br><span style="font-size:10px;">⚠${nLoad}案</span></span>`
         : nurse;
-      html += `<td class="nurse" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurseHtml}</td>`;
+      html += `<td class="nurse${over?' overload':''}" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurseHtml}</td>`;
       html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
     html += "</tr>";
+  }
+  if(!dates.length){
+    html += `<tr><td colspan="${colSpanAll}" style="padding:26px;color:var(--muted);">請在上方選擇起訖日期</td></tr>`;
   }
   html += "</tbody>";
   document.getElementById('mainTable').innerHTML = html;
@@ -1690,26 +1847,137 @@ function quickRemove(ev, dateISO, zone, idx){
 
 /* ===== 操作 ===== */
 /* ===== 護理師名單（預設 + 使用者自訂，可自行新增／移除）===== */
-function nurseList(org){
-  let custom=[];
-  try{ custom=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]'); }catch(e){}
-  const seen=new Set(), out=[];
-  [...(NURSES[org]||[]), ...custom].forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); out.push(n); } });
+/* ===== 護理師名單 =====
+   {add:[自行新增的], del:[被刪掉的預設]} → 實際名單 = 預設 NURSES － del ＋ add
+   預設與自訂都可刪，刪掉的可再新增回來。 */
+function normNurseData(o){
+  const out={};
+  ['ivy','tree'].forEach(function(k){
+    const v=(o&&o[k])||{};
+    out[k]={ add:Array.isArray(v.add)?v.add.slice():[], del:Array.isArray(v.del)?v.del.slice():[] };
+  });
   return out;
 }
-function saveCustomNurses(org, arr){
-  const base=new Set(NURSES[org]||[]);
-  const custom=arr.filter(n=>!base.has(n));
-  try{ localStorage.setItem('careone-nurses-'+org, JSON.stringify(custom)); }catch(e){}
+function nurseCfg(org){
+  if(nursesRemote) return nurseData[org] || (nurseData[org]={add:[],del:[]});
+  let c=null;
+  try{ c=JSON.parse(localStorage.getItem('careone-nurses2-'+org)||'null'); }catch(e){}
+  if(!c || typeof c!=='object'){
+    c={add:[],del:[]};
+    try{ const old=JSON.parse(localStorage.getItem('careone-nurses-'+org)||'[]');
+         if(Array.isArray(old)) c.add=old.filter(x=>x&&!(NURSES[org]||[]).includes(x)); }catch(e){}
+  }
+  if(!Array.isArray(c.add)) c.add=[];
+  if(!Array.isArray(c.del)) c.del=[];
+  return c;
+}
+function saveNurseCfg(org, c){
+  const cfg={add:c.add.slice(), del:c.del.slice()};
+  try{ localStorage.setItem('careone-nurses2-'+org, JSON.stringify(cfg)); }catch(e){}  // 一律留一份本機備份
+  if(nursesRemote){ nurseData[org]=cfg; pushNurses(org, cfg); }
+}
+/* 名單上傳（mode:"nurses"）。後端沒支援就自動退回本機，不會擋住操作。 */
+async function pushNurses(org, cfg){
+  if(!hasRemote) return false;
+  try{
+    setStatus("儲存護理師名單中…");
+    const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({
+      mode:"nurses", org:org, cfg:cfg, user:userName })});
+    if(j.mode !== "nurses"){
+      nursesRemote = false;
+      setStatus("⚠ 後端尚未支援名單同步，已存本機");
+      toast("⚠ 後端尚未支援名單同步（需更新 Apps Script），名單已存本機");
+      return false;
+    }
+    if(j.nurses) nurseData = normNurseData(j.nurses);
+    lastUpdatedAt = j.updatedAt || lastUpdatedAt;
+    setStatus("✓ 護理師名單已同步（雲端共用）｜" + fmtDT(lastUpdatedAt) + `（${userName}）`);
+    render();
+    return true;
+  }catch(e){
+    setStatus("⚠ 名單上傳失敗：" + e.message + "｜已存本機");
+    toast("⚠ 名單沒有存上雲端（已存本機）：" + e.message);
+    return false;
+  }
+}
+/* 後端剛啟用同步時，把本機既有的自訂名單一次搬上去 */
+function mergeLocalNursesToRemote(){
+  if(!nursesRemote) return;
+  let changed=false;
+  ['ivy','tree'].forEach(function(o){
+    let c=null;
+    try{ c=JSON.parse(localStorage.getItem('careone-nurses2-'+o)||'null'); }catch(e){}
+    if(!c) return;
+    const r=nurseData[o]||(nurseData[o]={add:[],del:[]});
+    (c.add||[]).forEach(x=>{ if(x && !r.add.includes(x)){ r.add.push(x); changed=true; } });
+    (c.del||[]).forEach(x=>{ if(x && !r.del.includes(x)){ r.del.push(x); changed=true; } });
+    if(changed) pushNurses(o, r);
+  });
+  if(changed) toast("已把本機的護理師名單合併到雲端共用");
+}
+function nurseList(org){
+  const c=nurseCfg(org), del=new Set(c.del), seen=new Set(), out=[];
+  [...(NURSES[org]||[]), ...c.add].forEach(n=>{
+    n=(n||'').trim();
+    if(n && !del.has(n) && !seen.has(n)){ seen.add(n); out.push(n); }
+  });
+  return out;
+}
+function isDefaultNurse(org,name){ return (NURSES[org]||[]).includes(name); }
+function nurseAdd(org, name){
+  name=(name||'').trim(); if(!name) return false;
+  const c=nurseCfg(org);
+  c.del=c.del.filter(x=>x!==name);
+  if(!isDefaultNurse(org,name) && !c.add.includes(name)) c.add.push(name);
+  saveNurseCfg(org,c); return true;
+}
+function nurseDelete(org, name){
+  const c=nurseCfg(org);
+  c.add=c.add.filter(x=>x!==name);
+  if(isDefaultNurse(org,name) && !c.del.includes(name)) c.del.push(name);
+  saveNurseCfg(org,c);
+}
+function syncLeaveNurseSelect(){
+  if(typeof renderLeavePicker==='function' && document.getElementById('leaveModalBg') &&
+     document.getElementById('leaveModalBg').classList.contains('show')){ try{ renderLeavePicker(); }catch(e){} }
 }
 function addNurse(org){
   const v=prompt("新增護理師姓名：","");
   if(v===null) return null;
-  const name=v.trim();
-  if(!name) return null;
-  const list=nurseList(org);
-  if(!list.includes(name)){ list.push(name); saveCustomNurses(org, list); toast(`已新增護理師「${name}」`); }
+  const name=v.trim(); if(!name) return null;
+  if(nurseList(org).includes(name)){ toast(`「${name}」已在名單中`); return name; }
+  nurseAdd(org,name); syncLeaveNurseSelect();
+  toast(`已新增護理師「${name}」`);
   return name;
+}
+/* ===== 名單管理視窗（新增／刪除，預設也可刪）===== */
+function openNurseMgr(){
+  hideTipNow();
+  document.getElementById('nurseMgrTitle').textContent=`👥 ${ORG_NAME[curOrg]} 護理師名單管理`;
+  document.getElementById('nurseMgrInput').value="";
+  renderNurseMgr();
+  document.getElementById('nurseMgrBg').classList.add('show');
+}
+function closeNurseMgr(){ document.getElementById('nurseMgrBg').classList.remove('show'); }
+function renderNurseMgr(){
+  const list=nurseList(curOrg), box=document.getElementById('nurseMgrList');
+  if(!list.length){ box.innerHTML='<div class="empty">名單是空的，請先新增</div>'; return; }
+  box.innerHTML = list.map(n=>`<span class="chip" draggable="false" style="background:${isDefaultNurse(curOrg,n)?'#C8E6C9':'#FFF59D'};cursor:default;">${n}<span class="x" onclick="removeNurseFromMgr('${n}')">✕</span></span>`).join("")
+    + `<div style="font-size:11px;color:var(--muted);margin-top:6px;">🟩 預設　🟨 自行新增</div>`;
+}
+function addNurseFromMgr(){
+  const el=document.getElementById('nurseMgrInput'), name=(el.value||'').trim();
+  if(!name){ toast("請輸入姓名"); return; }
+  if(nurseList(curOrg).includes(name)){ toast(`「${name}」已在名單中`); el.value=""; return; }
+  nurseAdd(curOrg,name); el.value="";
+  renderNurseMgr(); syncLeaveNurseSelect(); render();
+  toast(`已新增護理師「${name}」`);
+}
+function removeNurseFromMgr(name){
+  if(!confirm(`確定從名單刪除「${name}」？\n（已排好的班不會被更動，之後可再新增回來）`)) return;
+  nurseDelete(curOrg,name);
+  renderNurseMgr(); syncLeaveNurseSelect(); render();
+  toast(`已從名單刪除「${name}」`);
 }
 function manageNurses(org){
   let custom=[];
@@ -1732,17 +2000,21 @@ function editNurse(dateISO, zone, ev){
   const rec = getRec(curOrg, dateISO, zone);
   const cur = rec && rec.nurse ? rec.nurse : "";
   const list = nurseList(curOrg);
+  const load = nurseLoadMap(curOrg, dateISO.slice(0,7));   // 該日所屬月份的累積案量
   let opts = `<option value="">（清除）</option>` +
     list.map(n=>{
       const off = isOnLeave(curOrg, dateISO, n);
       const note = off ? leaveNote(curOrg, dateISO, n) : "";
-      const label = off ? `${n}（請假${note?"・"+note:""}）` : n;
+      const c = load[n]||0, over = c>=CASE_LIMIT;
+      /* 名字後直接顯示本月案量，方便挑案量最少的人；達上限加 ⚠ 並標紅 */
+      const label = `${n}　${c}${over?" ⚠":""}` + (off ? `（請假${note?"・"+note:""}）` : "");
       /* ★ 請假的人：灰字 + disabled，選不到。要排他就先去「🏖 請假」把登記取消 */
-      return `<option value="${n}"${n===cur?" selected":""}${off?" disabled style=\"color:#b0b5bd;\"":""}>${label}</option>`;
+      const style = off ? ' disabled style="color:#b0b5bd;"' : (over ? ' style="color:#c0392b;font-weight:bold;"' : '');
+      return `<option value="${n}"${n===cur?" selected":""}${style}>${label}</option>`;
     }).join("");
   if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
-  opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">🗂 移除自訂…</option>`;
-  td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:78px;background:#fff;color:#4a6da7;">${opts}</select>`;
+  opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">👥 管理名單（新增／刪除）…</option>`;
+  td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:112px;background:#fff;color:#4a6da7;">${opts}</select>`;
   const sel = td.querySelector('select');
   sel.addEventListener('click', e=>e.stopPropagation());
   sel.addEventListener('change', ()=>{
@@ -1752,7 +2024,12 @@ function editNurse(dateISO, zone, ev){
       if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; markDirty(curOrg, dateISO); saveData(); }
       render(); return;
     }
-    if(v==="__manage__"){ manageNurses(curOrg); render(); return; }
+    if(v==="__manage__"){ render(); openNurseMgr(); return; }
+    const vc = load[v]||0;
+    if(v && v!==cur && vc>=CASE_LIMIT &&
+       !confirm(`${v} 本月已累積 ${vc} 案（上限 ${CASE_LIMIT}）。\n確定仍要排這一班？`)){
+      render(); return;
+    }
     ensureCell(curOrg, dateISO, zone).nurse = v;
     markDirty(curOrg, dateISO);
     saveData(); render();
@@ -2003,6 +2280,22 @@ function renderLeaveList(){
 }
 
 /* ===== 護理師每月個案統計 ===== */
+/* 本月案量對照表 {護理師:案數}：供下拉選單／格子即時標示，與統計表同一套 zoneCount 口徑 */
+function nurseLoadMap(org, ym){
+  const [Y,M] = ym.split("-").map(Number);
+  const days = new Date(Y, M, 0).getDate();
+  const map = {};
+  for(let d=1; d<=days; d++){
+    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const rec = data[org][dateISO] || {};
+    for(const r0 of Object.values(rec)){
+      const rr = normalizeRec(r0);
+      if(!rr || !rr.nurse) continue;
+      map[rr.nurse] = (map[rr.nurse]||0) + zoneCount(rr);
+    }
+  }
+  return map;
+}
 function nurseStatsFor(org, ym){
   const [Y,M] = ym.split("-").map(Number);
   const days = new Date(Y, M, 0).getDate();
@@ -2027,7 +2320,7 @@ function showNurseStats(){
   const [Y,M] = curYM.split("-").map(Number);
   const rows = nurseStatsFor(curOrg, curYM);
   const tot = rows.reduce((s,[,v])=>s+v.cases,0);
-  let h = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${ORG_NAME[curOrg]}｜${Y}年${M}月　（個案數＝該護理師負責分區的「人數」加總）</div>`;
+  let h = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${ORG_NAME[curOrg]}｜${Y}年${M}月　（個案數＝該護理師負責分區的「人數」加總）　<span style="color:#c0392b;">⚠ 紅字＝已達 ${CASE_LIMIT} 案上限</span></div>`;
   h += `<table style="width:100%;border-collapse:collapse;font-size:13px;min-width:0;">
     <thead><tr>
       <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">護理師</th>
@@ -2037,7 +2330,7 @@ function showNurseStats(){
   rows.forEach(([n,s])=>{
     h += `<tr>
       <td style="border:1px solid var(--line);padding:6px;font-weight:bold;">${n}</td>
-      <td style="border:1px solid var(--line);padding:6px;text-align:center;font-weight:bold;color:var(--brand);">${s.cases}</td>
+      <td style="border:1px solid var(--line);padding:6px;text-align:center;font-weight:bold;color:${s.cases>=CASE_LIMIT?'#c0392b':'var(--brand)'};">${s.cases}${s.cases>=CASE_LIMIT?' ⚠':''}</td>
       <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.days.size}</td>
     </tr>`;
   });
@@ -2171,16 +2464,15 @@ function deleteCell(){
 
 /* CSV 匯出 */
 function exportCSV(){
-  const [Y,M] = curYM.split("-").map(Number);
-  const days = new Date(Y, M, 0).getDate();
+  const dates = viewDates();                 // 跟著畫面顯示區間
+  if(!dates.length){ toast("目前沒有可匯出的日期"); return; }
   const hid = hiddenZones();
-  const zones = zonesForMonth(curOrg, curYM).filter(z=>!hid.has(z));
+  const zones = zonesForDates(curOrg, dates).filter(z=>!hid.has(z));
   let rows = [["日期","週", ...zones.flatMap(z=>[`${z}區人數`,`${z}區護理師`,`${z}區行政區`])]];
-  for(let d=1; d<=days; d++){
-    const dateISO = `${Y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const wd = WEEK[new Date(Y, M-1, d).getDay()];
+  for(const dateISO of dates){
+    const wd = WEEK[fromISO(dateISO).getDay()];
     const rec = data[curOrg][dateISO]||{};
-    const row=[d, wd];
+    const row=[dateISO, wd];
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
       const dd = info ? info.tags.map(t=>{
@@ -2194,7 +2486,7 @@ function exportCSV(){
   const csv = "﻿" + rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download = `${ORG_NAME[curOrg]}_${curYM}_行程表.csv`;
+  a.download = `${ORG_NAME[curOrg]}_${dates[0]}_至_${dates[dates.length-1]}_行程表.csv`;
   a.click();
 }
 
@@ -2224,6 +2516,7 @@ document.getElementById('restoreInput').addEventListener('change', e=>{
   e.target.value="";
 });
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
+document.getElementById('nurseMgrBg').addEventListener('click', e=>{ if(e.target.id==='nurseMgrBg') closeNurseMgr(); });
 document.getElementById('nurseModalBg').addEventListener('click', e=>{ if(e.target.id==='nurseModalBg') closeNurseStats(); });
 document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.target.id==='leaveModalBg') closeLeave(); });
 
@@ -2231,8 +2524,12 @@ document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.targ
 (async ()=>{
   const now = new Date();
   curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  try{ spanMode = localStorage.getItem('careone-spanmode')==='1'; }catch(e){}
+  if(spanMode) defaultSpan();
+  applyModeUI(); syncYMToSpan();
   initUser();
   await loadData();
+  mergeLocalNursesToRemote();   // 後端已支援時，把本機既有自訂名單搬上雲端
   render();
   if(hasRemote){
     /* ★ 輪詢成本：Apps Script 消費者帳號每天只有 90 分鐘指令碼執行時間。
