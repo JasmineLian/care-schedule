@@ -54,6 +54,11 @@ td.day,td.wd{width:44px; font-weight:bold; background:#fafbfd; white-space:nowra
 tr.msep td{background:#dfe4ee !important; color:var(--brand); font-weight:bold; text-align:left; font-size:12.5px; padding:4px 10px; letter-spacing:.5px;}
 tr.wknd td{background:#f1f2f6;}
 tr.wknd td.day,tr.wknd td.wd{background:#e8eaf0;}
+tr.holiday td{background:#fdf0f7;}
+tr.holiday td.day,tr.holiday td.wd{background:#f9d6ec; color:#b0357a;}
+.hname{font-size:9.5px; font-weight:normal; line-height:1.15; margin-top:1px; color:#b0357a; white-space:normal;}
+.pdel{float:right; border:none; background:none; cursor:pointer; color:#c0392b; font-size:12px; padding:0 2px;}
+.pdel:hover{background:#fde2e2; border-radius:4px;}
 td.cnt{width:56px; font-weight:bold; font-size:14px; cursor:pointer;}
 td.nurse{width:72px; cursor:pointer; color:#4a6da7; font-size:12.5px;}
 td.nurse:hover{outline:2px solid var(--brand2); outline-offset:-2px;}
@@ -292,7 +297,8 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="modal">
     <h3 id="modalTitle">編輯</h3>
     <label>👥 人數</label>
-    <input type="number" id="editCount" min="0">
+    <input type="number" id="editCount" min="0" oninput="updateCountHint()">
+    <div id="countHint" style="font-size:11.5px;color:var(--muted);margin-top:3px;"></div>
     <label>📍 已選標籤（依順序，可同名並存，點 × 移除）</label>
     <div class="selected-area" id="selectedArea"></div>
     <label>🎯 點選新增行政區（同組同色）</label>
@@ -373,6 +379,27 @@ function tagCount(tag){
   if(tag.qty!=null && tag.qty!=="") return +tag.qty;
   return tag.people ? tag.people.length : 0;
 }
+/* ★ 名單人數（不含機構 qty 的額外人數）：用來和 rec.count 比對 */
+function listPeople(tags){ return (tags||[]).reduce(function(s,t){ return s + (t.people ? t.people.length : 0); }, 0); }
+/* 有個案名單、但「人數」和名單筆數不同 → 回傳名單人數；一致或沒有名單則回傳 null */
+function countMismatch(rec){
+  if(!rec || !rec.tags) return null;
+  const n = listPeople(rec.tags);
+  if(!n) return null;
+  return (rec.count||0) === n ? null : n;
+}
+let editCountOrig = 0, editPeopleOrig = 0;
+function updateCountHint(){
+  const el = document.getElementById('countHint');
+  if(!el) return;
+  const n = listPeople(tempTags);
+  if(!n){ el.innerHTML = ""; return; }
+  const v = parseInt(document.getElementById('editCount').value)||0;
+  const auto = (v === editCountOrig) ? Math.max(0, editCountOrig + (n - editPeopleOrig)) : v;
+  el.innerHTML = `個案名單共 <b>${n}</b> 人` +
+    (auto !== n ? `　<span style="color:#c0392b;">⚠ 儲存後人數會是 ${auto}，與名單不同</span>
+      <button class="btn" style="font-size:11px;padding:1px 7px;" onclick="document.getElementById('editCount').value=${n};editCountOrig=-1;updateCountHint();">改成 ${n}</button>` : "");
+}
 // 分區顯示人數：宣告總數 + 機構代表的額外人數（機構 qty 減其明細筆數）
 function zoneCount(rec){
   if(!rec) return 0;
@@ -381,6 +408,21 @@ function zoneCount(rec){
   return (rec.count||0) + extra;
 }
 const WEEK = ["日","一","二","三","四","五","六"];
+/* ★ 政府行政機關辦公日曆表：週一～五的放假日（週六日本來就標灰）。
+   來源：中華民國115年（西元2026年）政府行政機關辦公日曆表。新年度請在這裡增補。 */
+const HOLIDAYS = {
+  "2026-01-01":"開國紀念日",
+  "2026-02-16":"春節","2026-02-17":"春節","2026-02-18":"春節","2026-02-19":"春節","2026-02-20":"春節",
+  "2026-02-27":"和平紀念日補假",
+  "2026-04-03":"兒童節補假","2026-04-06":"清明節補假",
+  "2026-05-01":"勞動節",
+  "2026-06-19":"端午節",
+  "2026-09-25":"中秋節","2026-09-28":"教師節",
+  "2026-10-09":"國慶日補假","2026-10-26":"光復節補假",
+  "2026-12-25":"行憲紀念日"
+};
+/* 補班日（週六要上班）：2026 年沒有；有的話寫在這裡，例如 {"2027-xx-xx":"補班"} */
+const WORKDAYS = {};
 const CASE_LIMIT = 95;   // 每位護理師每月案量上限：達到即標紅提醒（要改門檻改這裡）
 const STORE_KEY = "careone-schedule-v1";
 const NAME_SKIP = new Set(["姓名","地址","電話","備註","一般","重大","榮民","福民","低收","身分","順序","診斷","說明","費用","耗材","小計","家字號","次數","間隔","刷卡","訪視日","預約訪視表","聯絡人","中低收入戶","身分證","出生日期","上次訪視","訪視次數","實際申報","更換管路","中低","境差","人瑞","收入","福保","護理之家","收入戶","經濟差","家境差","清寒","福保重大"]);
@@ -448,6 +490,55 @@ function markDeleted(org, dateISO){
   dirtyDays.delete(org + "|" + dateISO);
 }
 function clearDirty(){ dirtyDays.clear(); deletedDays.clear(); }
+/* 上傳失敗時把這次的異動放回待送清單，重試時仍走增量（不會退回整包覆蓋） */
+function restoreDirty(touched, deletes){
+  (touched||[]).forEach(function(t){ if(!deletedDays.has(t[0]+"|"+t[1])) dirtyDays.add(t[0]+"|"+t[1]); });
+  (deletes||[]).forEach(function(k){ if(!dirtyDays.has(k)) deletedDays.add(k); });
+}
+
+/* ★ 基準快照（2026-09-23 新增）=====
+   記下「最後一次和共用資料庫一致」時的內容。存檔時用它判斷：
+   ・我改了哪幾天、哪幾區（和基準不同的才算我改的）
+   ・別人在這段時間改了哪幾區（遠端和基準不同的）
+   兩邊只要不是改到同一區，就合併後再送，誰都不會蓋掉誰。 */
+let baseSnap = null;
+function cloneJSON(o){ return o===undefined ? undefined : JSON.parse(JSON.stringify(o)); }
+function setBase(){ try{ baseSnap = cloneJSON(data); }catch(e){ baseSnap = null; } }
+function stableStr(v){
+  if(Array.isArray(v)) return '[' + v.map(stableStr).join(',') + ']';
+  if(v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function(k){ return JSON.stringify(k) + ':' + stableStr(v[k]); }).join(',') + '}';
+  return v===undefined ? 'null' : JSON.stringify(v);
+}
+function sameJSON(a, b){ return stableStr(a) === stableStr(b); }
+function baseDay(o, d){ return baseSnap && baseSnap[o] ? baseSnap[o][d] : undefined; }
+/* 以「區」為單位的三方合併：我沒動的區用遠端、別人沒動的區用我的；兩邊都改同一區才算衝突（以我這次為準並提醒） */
+function mergeDay(bDay, lDay, rDay, conflicts, label){
+  const out = {};
+  const zs = new Set([].concat(Object.keys(bDay||{}), Object.keys(lDay||{}), Object.keys(rDay||{})));
+  zs.forEach(function(z){
+    const b=(bDay||{})[z], l=(lDay||{})[z], r=(rDay||{})[z];
+    let v;
+    if(sameJSON(l, b)) v = r;
+    else if(sameJSON(r, b) || sameJSON(r, l)) v = l;
+    else { v = l; conflicts.push(label + " " + z + "區"); }
+    if(v !== undefined) out[z] = cloneJSON(v);
+  });
+  return out;
+}
+/* 沒有記到異動時（例如上傳失敗後按 🔄 同步選擇上傳本機），用基準快照找出真正改過的日期 */
+function diffVsBase(){
+  const touched = [], dels = [];
+  if(!baseSnap) return null;
+  ["ivy","tree"].forEach(function(o){
+    const cur = data[o]||{}, base = baseSnap[o]||{};
+    const ds = new Set([].concat(Object.keys(cur), Object.keys(base)));
+    ds.forEach(function(d){
+      if(sameJSON(cur[d], base[d])) return;
+      if(cur[d]) touched.push([o, d]); else dels.push(o + "|" + d);
+    });
+  });
+  return {touched: touched, deletes: dels};
+}
 let lastRemoteDays = 0;                 // 上次成功讀到的遠端總天數，用於暴跌防呆
 const BACKUP_KEY = STORE_KEY + "-backup";
 /* ★ 本機快取：開頁時先把上次看到的資料顯示出來，背景再去拉最新的。
@@ -699,6 +790,7 @@ async function loadData(){
       remoteOK = true;
       lastRemoteDays = countDays(data);
       migrateAll();
+      setBase();
       saveCache();
       setStatus("✓ 已載入共用資料｜最後更新：" + fmtDT(lastUpdatedAt) + (j.user ? `（${j.user}）` : "") + `｜${lastRemoteDays} 天`);
       if(shownFromCache){ try{ render(); }catch(e){} toast("已更新到最新資料，可以編輯了"); }
@@ -744,6 +836,14 @@ function saveData(){
     saveMerge(touched, dels);
     return;
   }
+  /* ★ 以前這裡直接整包覆蓋 —— 例如上傳失敗後異動清單被清掉，再按 🔄 同步選「上傳本機」，
+     就會用舊畫面把所有日期蓋回去（2026-09-23 10:24 疑似就是這樣把別人剛匯入的 4 天洗回舊版）。
+     現在先和基準快照比對，只送真正改過的日期。 */
+  if(hasRemote && remoteOK && baseSnap){
+    const df = diffVsBase();
+    if(df && (df.touched.length || df.deletes.length)){ saveMerge(df.touched, df.deletes); return; }
+    if(df){ markBackupSynced(); setStatus("✓ 沒有需要上傳的變更"); return; }
+  }
   saveDataFull();
 }
 function saveDataFull(){
@@ -774,6 +874,7 @@ function saveDataFull(){
         const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
         lastUpdatedAt = j.updatedAt || Date.now();
         lastRemoteDays = nNow;
+        setBase();
         markBackupSynced();
         setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）｜${nNow} 天`);
       }catch(e){
@@ -804,13 +905,56 @@ function saveDataFull(){
    匯入 Excel 走這條路 —— 就算前端的 data 有問題，結構上也不可能刪掉沒碰過的天。
    touched：[[org, dateISO], ...] */
 async function saveMerge(touched, deletes){
-  deletes = deletes || [];
+  deletes = (deletes || []).slice();
   if(!hasRemote){ saveDataFull(); return true; }
   if(!remoteOK){
+    restoreDirty(touched, deletes);
     backupLocal();
     setStatus("🔒 唯讀中｜變更只存在本機備份，尚未上傳（等載入完成或按 🔄 同步）");
     toast("⚠ 資料還在取得最新版本，請稍候再改");
     return false;
+  }
+  pendingSave = true;
+  /* ★ 衝突檢查（2026-09-23 新增）：先看共用資料庫在我上次同步之後有沒有被別人改過。
+     有的話，只抓這幾天所在的月份，以「區」為單位和我的修改合併後再送，
+     避免我這份舊畫面把別人剛做的修改（或剛匯入的資料）整天蓋掉。 */
+  const conflicts = [];
+  let othersChanged = false;
+  if(baseSnap && remoteSupportsParts !== false){
+    try{
+      setStatus("儲存中…（確認有沒有人同時在改）");
+      const idx = await fetchIndex();
+      if(idx.updatedAt && idx.updatedAt !== lastUpdatedAt){
+        othersChanged = true;
+        setStatus("⏳ 有其他人剛更新，先合併再儲存…");
+        const need = {};
+        touched.forEach(function(t){ (need[t[0]] = need[t[0]] || new Set()).add(t[1].slice(0,7)); });
+        deletes.forEach(function(k){ const p=k.split("|"); (need[p[0]] = need[p[0]] || new Set()).add(p[1].slice(0,7)); });
+        const remote = { ivy:{}, tree:{} };
+        for(const o of Object.keys(need)){
+          const j = await fetchJSONRetry(SYNC_URL + "?org=" + o + "&ym=" + [...need[o]].join(",") +
+                                         "&t=" + Date.now() + (CAN_GUNZIP ? "&gz=1" : ""));
+          Object.assign(remote[o], j.part || {});
+        }
+        touched.forEach(function(t){
+          const o=t[0], d=t[1];
+          if(!data[o] || !data[o][d]) return;
+          data[o][d] = mergeDay(baseDay(o,d), data[o][d], remote[o][d], conflicts, ORG_NAME[o] + " " + d);
+          Object.values(data[o][d]).forEach(normalizeRec);
+        });
+        deletes = deletes.filter(function(k){
+          const p=k.split("|"), o=p[0], d=p[1];
+          if(remote[o][d] && !sameJSON(remote[o][d], baseDay(o,d))){
+            data[o][d] = cloneJSON(remote[o][d]);         // 別人剛改過這天 → 不刪，保留別人的版本
+            conflicts.push(ORG_NAME[o] + " " + d + "（整天刪除已取消）");
+            return false;
+          }
+          return true;
+        });
+      }
+    }catch(e){
+      /* 索引／分段取不到：維持原本行為直接送（不會比修改前差） */
+    }
   }
   const patch = {};
   touched.forEach(function(t){
@@ -820,8 +964,7 @@ async function saveMerge(touched, deletes){
     patch[o][d] = data[o][d];
   });
   const nDays = Object.keys(patch).reduce((s,o)=>s+Object.keys(patch[o]).length, 0) + deletes.length;
-  if(!nDays) return true;
-  pendingSave = true;
+  if(!nDays){ pendingSave = false; return true; }
   setStatus(`儲存中…（增量：${nDays} 天）`);
   backupLocal();
   try{
@@ -835,14 +978,31 @@ async function saveMerge(touched, deletes){
       saveDataFull();
       return true;
     }
-    lastUpdatedAt = j.updatedAt || Date.now();
+    /* ★ 別人也有更新時，不能直接把 lastUpdatedAt 設成這次的時間，
+       否則輪詢會以為已是最新，永遠拿不到別人改的其他日期 → 存完立刻整包重抓一次 */
+    lastUpdatedAt = othersChanged ? -1 : (j.updatedAt || Date.now());
     if(j.days) lastRemoteDays = j.days;
+    if(baseSnap){
+      Object.keys(patch).forEach(function(o){ Object.keys(patch[o]).forEach(function(d){
+        if(!baseSnap[o]) baseSnap[o] = {};
+        baseSnap[o][d] = cloneJSON(patch[o][d]);
+      }); });
+      deletes.forEach(function(k){ const p=k.split("|"); if(baseSnap[p[0]]) delete baseSnap[p[0]][p[1]]; });
+    }
     saveCache();
     markBackupSynced();
     setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天` + ((j.deleted||0)?`、刪除 ${j.deleted} 天`:"") +
-              `｜共 ${j.days||"?"} 天｜` + fmtDT(lastUpdatedAt) + `（${userName}）`);
+              `｜共 ${j.days||"?"} 天｜` + fmtDT(j.updatedAt || Date.now()) + `（${userName}）`);
+    if(othersChanged) render();
+    if(conflicts.length){
+      toast(`⚠ 你和別人同時改到：${conflicts.slice(0,4).join("、")}${conflicts.length>4?" 等":""}，已以你這次的修改為準，請確認`);
+    }else if(othersChanged){
+      toast("已和其他人剛做的修改合併後儲存");
+    }
+    if(othersChanged) setTimeout(function(){ pollRemote(true); }, 300);
     return true;
   }catch(e){
+    restoreDirty(touched, deletes);
     setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，請按 🔄 同步重試");
     toast("⚠ 上傳失敗（資料已存本機備份）：" + e.message);
     return false;
@@ -863,6 +1023,7 @@ async function pollRemote(force){
 }
 async function pollRemoteInner(force){
   if(!hasRemote || pendingSave) return;
+  if(dirtyDays.size || deletedDays.size) return;   // ★ 還有沒送出的異動，先別用遠端整包換掉
   if(document.getElementById('modalBg').classList.contains('show')) return;  // 編輯中不打擾
   if(!force && tipPinned) return;  // 釘選閱讀中不打擾
   if(!force && hasUnsyncedBackup()) return;   // ★ 有未上傳的變更，別讓自動輪詢蓋掉
@@ -880,10 +1041,12 @@ async function pollRemoteInner(force){
       const full = await fetchAllParts(function(done, total){
         setStatus("⏳ 取得他人更新中…（" + done + " / " + total + " 批）");
       });
+      if(pendingSave || dirtyDays.size || deletedDays.size) return;   // ★ 抓的期間使用者又改了東西 → 這次先不換，免得把剛改的洗掉
       data = full.data;
       lastUpdatedAt = full.updatedAt;
       lastRemoteDays = full.total;
       migrateAll();
+      setBase();
       saveCache();
       render();
       toast(`已同步最新資料${full.user?`（${full.user} 更新）`:""}`);
@@ -898,6 +1061,7 @@ async function pollRemoteInner(force){
       data = j.data;
       lastUpdatedAt = j.updatedAt;
       migrateAll();
+      setBase();
       render();
       toast(`已同步最新資料${j.user?`（${j.user} 更新）`:""}`);
     }
@@ -925,7 +1089,7 @@ async function manualSync(){
       if(confirm(`連線已恢復。\n\n目前畫面（本機未上傳）：${mine} 天\n共用資料庫：${theirs} 天\n最後更新：${fmtDT(j.updatedAt||0)}${j.user?`（${j.user}）`:""}\n\n【確定】把本機這份上傳，覆蓋共用資料庫\n【取消】改用共用資料庫的內容，放棄本機未上傳的變更`)){
         saveData();   // 有記到異動就走增量，否則整包
       }else{
-        data = j.data; lastUpdatedAt = j.updatedAt || 0; clearDirty(); migrateAll();
+        data = j.data; lastUpdatedAt = j.updatedAt || 0; clearDirty(); migrateAll(); setBase();
         markBackupSynced(); render();
         setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `｜${theirs} 天`);
         toast("已改用共用資料庫的內容");
@@ -1229,6 +1393,7 @@ async function applyParsed(results, preMsgs){
       lastRemoteDays = countDays(data);
       remoteOK = true;
       migrateAll();
+      setBase();
     }catch(e){
       remoteOK = false;
       report.innerHTML = [].concat(msgs, [
@@ -1502,7 +1667,8 @@ function render(){
     }
     prevYM = ymRow;
     const wd = WEEK[dt.getDay()];
-    const wknd = (wd==="六"||wd==="日") ? " wknd" : "";
+    const hName = HOLIDAYS[dateISO] || "";
+    const wknd = ((wd==="六"||wd==="日") && !WORKDAYS[dateISO]) ? " wknd" : (hName ? " holiday" : "");
     const today = dateISO===todayISO ? " today" : "";
     const dayLabel = crossMonth ? `${dt.getMonth()+1}/${d}` : d;
     const offToday = leaveOf(curOrg, dateISO);
@@ -1510,7 +1676,7 @@ function render(){
     const offMark = offNames.length
       ? `<div style="font-size:9.5px;color:#e67e22;font-weight:normal;line-height:1.2;margin-top:1px;" title="${offNames.map(x=>x+(offToday[x]?"・"+offToday[x]:"")).join("、")}">🏖${offNames.length}</div>`
       : "";
-    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}${offMark}</td><td class="wd">${wd}</td>`;
+    html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}${offMark}</td><td class="wd"${hName?` title="國定假日：${hName}"`:""}>${wd}${hName?`<div class="hname">${hName}</div>`:""}${WORKDAYS[dateISO]?`<div class="hname">補班</div>`:""}</td>`;
     const rec = data[curOrg][dateISO] || {};
     for(const z of zones){
       const info = rec[z] ? normalizeRec(rec[z]) : null;
@@ -1530,7 +1696,10 @@ function render(){
           >${tag.name}${badge}<span class="x" onclick="quickRemove(event,'${dateISO}','${z}',${i})">✕</span></span>`;
       });
       chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
-      html += `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`;
+      const mis = info ? countMismatch(info) : null;
+      html += mis===null
+        ? `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`
+        : `<td class="cnt" style="color:#c0392b;background:#fff0f0;" title="人數 ${info.count||0} 與個案名單 ${mis} 人不符，點擊開啟後可一鍵修正" onclick="openModal('${dateISO}','${z}')">${cnt}<br><span style="font-size:10px;">名單${mis}</span></td>`;
       const nurse = info && info.nurse ? info.nurse : "";
       /* 已排班的人那天登記了請假 → 標紅提醒（不自動清掉，由人決定怎麼調） */
       const conflict = nurse && isOnLeave(curOrg, dateISO, nurse);
@@ -1728,7 +1897,7 @@ function buildTipContent(dateISO, zone, idx){
     h += `<div class="none">${tagIsInst(tag)?"此機構標籤尚無個案明細，人數以上方設定為準":"此標籤為手動新增，尚無個案明細"}</div>`;
   }else{
     ppl.forEach((p,i)=>{
-      h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}</div>`;
+      h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}<button class="pdel" title="從這一區刪除這位個案（人數同步減 1）" onclick="event.stopPropagation();deletePerson('${dateISO}','${zone}',${idx},${i})">🗑</button></div>`;
       if(p.last) h += `<div class="plast">🗓 上次訪視 ${p.last}</div>`;
       if(p.addr) h += `<div class="paddr">🏠 ${p.addr}</div>`;
       if(p.tube) h += `<div class="ptube">🩺 ${p.tube}</div>`;
@@ -1743,6 +1912,22 @@ function buildTipContent(dateISO, zone, idx){
   b.disabled = true;
   b.textContent = "✂ 勾選個案後拆分成小標籤";
   return true;
+}
+/* ★ 刪除單一個案：人數同步減 1；標籤刪到沒人就整個移除（機構標籤的代表人數 qty 不變） */
+function deletePerson(dateISO, zone, idx, i){
+  const rec = getRec(curOrg, dateISO, zone);
+  const tag = rec && rec.tags[idx];
+  if(!tag || !tag.people || !tag.people[i]) return;
+  const p = tag.people[i];
+  if(!confirm(`確定從 ${dateISO} ${zone}區 刪除「${p.name}」（${tag.name}）？\n該區人數會同步減 1。`)) return;
+  tag.people.splice(i, 1);
+  rec.count = Math.max(0, (rec.count||0) - 1);
+  const tagGone = tag.people.length===0 && !tagIsInst(tag);
+  if(tagGone) rec.tags.splice(idx, 1);
+  markDirty(curOrg, dateISO);
+  saveData(); render();
+  if(tagGone) hideTipNow(); else buildTipContent(dateISO, zone, idx);
+  toast(`已刪除 ${p.name}，${zone}區人數 ${zoneCount(rec)}`);
 }
 function tipToggleSel(i, on){
   if(on) tipSel.add(i); else tipSel.delete(i);
@@ -1841,8 +2026,9 @@ function quickRemove(ev, dateISO, zone, idx){
   if(!rec || !rec.tags[idx]) return;
   const tag = rec.tags[idx];
   const ppl = tag.people ? tag.people.length : 0;
-  if(ppl && !confirm(`「${tag.name}」含 ${ppl} 筆個案資料，確定移除？（人數不會自動變更）`)) return;
+  if(ppl && !confirm(`「${tag.name}」含 ${ppl} 筆個案資料，確定移除？（該區人數會同步減 ${ppl}）`)) return;
   rec.tags.splice(idx, 1);
+  if(ppl) rec.count = Math.max(0, (rec.count||0) - ppl);   // ★ 以前不扣，造成「人數」和名單對不上
   markDirty(curOrg, dateISO);
   saveData(); render();
   toast(`已移除 ${tag.name}`);
@@ -2392,11 +2578,14 @@ function openModal(dateISO, zone){
   tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[], qty:t.qty, isInst:t.isInst})) : [];
   document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
   document.getElementById('editCount').value = rec ? rec.count : "";
+  editCountOrig = rec ? (rec.count||0) : 0;
+  editPeopleOrig = listPeople(tempTags);
   document.getElementById('customInput').value = "";
   renderPicker();
   document.getElementById('modalBg').classList.add('show');
 }
 function renderPicker(){
+  updateCountHint();
   const sel = document.getElementById('selectedArea');
   if(tempTags.length===0){
     sel.innerHTML = '<div class="empty">尚未選擇，點下方色塊即可加入</div>';
@@ -2444,7 +2633,9 @@ function addCustom(){
 function closeModal(){ document.getElementById('modalBg').classList.remove('show'); editing=null; }
 function saveCell(){
   if(!editing) return;
-  const cnt = parseInt(document.getElementById('editCount').value)||0;
+  let cnt = parseInt(document.getElementById('editCount').value)||0;
+  /* ★ 沒手動改人數欄時，人數跟著名單增減（以前移除標籤後人數原封不動 → 對不上） */
+  if(cnt === editCountOrig) cnt = Math.max(0, editCountOrig + (listPeople(tempTags) - editPeopleOrig));
   if(!data[editing.org][editing.dateISO]) data[editing.org][editing.dateISO]={};
   const rec0 = data[editing.org][editing.dateISO][editing.zone];
   data[editing.org][editing.dateISO][editing.zone] = {
