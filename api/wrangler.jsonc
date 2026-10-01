@@ -1,0 +1,20 @@
+{
+  // 居護行程動態表 — 共用資料庫（Cloudflare Worker + Durable Object）
+  "name": "care-schedule-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULE", "class_name": "ScheduleDB" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ScheduleDB"] }
+  ],
+  "vars": {
+    // 只允許自己的網頁寫入；要從別的網址測試時可暫時清空
+    "ALLOWED_ORIGINS": "https://jasminelian.github.io"
+  },
+  "observability": { "enabled": true }
+}
