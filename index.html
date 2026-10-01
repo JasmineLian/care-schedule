@@ -310,9 +310,20 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     </div>
     <div class="acts">
       <button class="btn danger" onclick="deleteCell()">刪除此格</button>
+      <button class="btn" id="histBtn" onclick="openHistory()" style="display:none;" title="這一天誰、幾點、改了什麼；可還原">📜 變更紀錄</button>
       <button class="btn" onclick="closeModal()">取消</button>
       <button class="btn primary" onclick="saveCell()">儲存</button>
     </div>
+  </div>
+</div>
+
+<!-- 變更紀錄 Modal（新後端才有） -->
+<div class="modal-bg" id="histModalBg" style="z-index:70;">
+  <div class="modal">
+    <h3 id="histTitle">📜 變更紀錄</h3>
+    <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;">最近 60 筆，新的在上面。「還原到這次之前」只會影響這一天，而且已指定的護理師不會被舊版本蓋掉。</div>
+    <div id="histBody" style="max-height:360px;overflow:auto;"></div>
+    <div class="acts"><button class="btn primary" onclick="closeHistory()">關閉</button></div>
   </div>
 </div>
 
@@ -459,9 +470,15 @@ function leaveNote(org, dateISO, name){
 /* ===== 共用同步設定 =====
    ★ 部署到 GitHub 時：把下面引號內換成你的 Google Apps Script「網頁應用程式」網址
    （做法見「部署教學.md」）。留空 = 資料只存在本機瀏覽器。 */
-const SYNC_URL = "https://script.google.com/macros/s/AKfycby4uDv_JrY6_e0AqRzuRIF8YZLHdc0KlxvMY0EvTOBlWpE5hZxdCS_ZvtdlEZdpAKlB/exec";
+/* ★ 2026-10 起改用 Cloudflare（Durable Object）。部署完把下面網址換成你的 Worker 網址。
+   要暫時退回 Apps Script，把原本的 script.google.com 網址貼回來即可（程式兩種都支援）。 */
+const SYNC_URL = "https://care-schedule-api.jasminelian7.workers.dev";
 
-const hasRemote = SYNC_URL.startsWith("https://script.google.com/");
+const hasRemote = /^https:\/\//.test(SYNC_URL) && !SYNC_URL.includes("請改成");
+/* 後端是 Durable Object（版本 do-…）時為 true：可以用伺服器端合併、只抓有變的月份、輪詢更頻繁 */
+let fastBackend = false;
+let knownMt = null;           // 各月份檔最後修改時間（輪詢時只重抓有變的月份）
+let editSeq = 0;              // ★ 每次本機有修改或存檔就 +1；輪詢抓資料期間若有變，就不套用抓回來的舊資料
 let userName = "";
 let lastUpdatedAt = 0;
 let pendingSave = false;
@@ -479,12 +496,41 @@ let remoteOK = false;
    改成增量之後，各人只送自己動過的日期，彼此不會踩到。 */
 const dirtyDays = new Set();     // "ivy|2026-09-15"
 const deletedDays = new Set();   // 整天被刪掉的
+/* ★ v7 護理師鎖定：分區指定了護理師就視為鎖定。
+   只有使用者在確認視窗按「確定」的那一區，才會放進 nurseUnlock（"ivy|2026-09-15|C"），
+   隨下一次存檔送給後端；後端看到才允許改掉／清掉／刪掉，其餘一律保留原本的護理師。 */
+const nurseUnlock = new Set();
+function confirmNurseUnlock(org, dateISO, zone, cur, next){
+  if(!cur || cur === next) return true;                 // 原本沒指定、或沒變 → 不用解鎖
+  const what = next ? `改成「${next}」` : (next === null ? "連同護理師整區刪除" : "清除");
+  if(!confirm(`🔒 ${ORG_NAME[org]} ${dateISO} ${zone}區 已指定護理師「${cur}」。\n\n確定要解鎖並${what}嗎？`)) return false;
+  nurseUnlock.add(org + "|" + dateISO + "|" + zone);
+  return true;
+}
+function unlockKeysFor(touched, deletes){
+  const days = new Set();
+  (touched||[]).forEach(t=>days.add(t[0]+"|"+t[1]));
+  (deletes||[]).forEach(k=>days.add(k));
+  return [...nurseUnlock].filter(k=>days.has(k.split("|").slice(0,2).join("|")));
+}
+/* 後端回報「有鎖定的護理師被保留下來」→ 提示並整包重抓，讓畫面和資料庫一致 */
+function handleNurseKept(j){
+  const kept = (j && j.nurseKept) || [];
+  if(!kept.length) return false;
+  const ex = kept.slice(0,3).map(k=>`${k.date.slice(5)} ${k.zone}區 ${k.nurse}`).join("、");
+  toast(`🔒 已保留 ${kept.length} 區已鎖定的護理師（${ex}${kept.length>3?" 等":""}）。要更改請點護理師格並確認解鎖`);
+  lastUpdatedAt = -1;
+  setTimeout(function(){ pollRemote(true); }, 300);
+  return true;
+}
 function markDirty(org, dateISO){
+  editSeq++;
   if(!org || !dateISO) return;
   dirtyDays.add(org + "|" + dateISO);
   deletedDays.delete(org + "|" + dateISO);
 }
 function markDeleted(org, dateISO){
+  editSeq++;
   if(!org || !dateISO) return;
   deletedDays.add(org + "|" + dateISO);
   dirtyDays.delete(org + "|" + dateISO);
@@ -599,6 +645,7 @@ let remoteSupportsParts = null;      // null=還不知道, true/false
 async function fetchIndex(){
   const j = await fetchJSONRetry(SYNC_URL + "?index=1&t=" + Date.now());
   if(!j.days) throw new Error("索引格式不正確");
+  fastBackend = /^do-/.test(j.v || "");
   if(j.leave){ leaveData = { ivy:j.leave.ivy||{}, tree:j.leave.tree||{} }; }
   if(j.nurses){                       // 後端已支援名單同步
     nurseData = normNurseData(j.nurses);
@@ -648,7 +695,37 @@ async function fetchAllParts(onProgress){
   if(idx.total && got !== idx.total){
     throw new Error("分段抓取不完整（索引 " + idx.total + " 天，實際拿到 " + got + " 天）");
   }
-  return { data: out, updatedAt: idx.updatedAt || 0, user: idx.user || "", total: got };
+  return { data: out, updatedAt: idx.updatedAt || 0, user: idx.user || "", total: got, mt: idx.mt || null };
+}
+/* ★ 只抓有變的月份（新後端）：idx.mt 是各月份檔的最後修改時間 */
+async function fetchChangedParts(idx){
+  const now = idx.mt || {}, old = knownMt || {};
+  const changed = { ivy:[], tree:[] };
+  new Set([...Object.keys(now), ...Object.keys(old)]).forEach(function(k){
+    if(now[k] === old[k]) return;
+    const m = k.match(/^(ivy|tree)-(\d{4}-\d{2})$/);
+    if(m) changed[m[1]].push(m[2]);
+  });
+  const out = { ivy:{}, tree:{} };
+  for(const o of ["ivy","tree"]){
+    if(!changed[o].length) continue;
+    const j = await fetchJSONRetry(SYNC_URL + "?org=" + o + "&ym=" + changed[o].join(",") + "&t=" + Date.now());
+    Object.assign(out[o], j.part || {});
+  }
+  return { changed: changed, data: out, mt: now };
+}
+/* 把有變的月份換進畫面（其他月份、還在改的那幾天都不動） */
+function applyChangedParts(r){
+  ["ivy","tree"].forEach(function(o){
+    r.changed[o].forEach(function(ym){
+      Object.keys(data[o]).forEach(function(d){ if(d.slice(0,7)===ym){ delete data[o][d]; if(baseSnap&&baseSnap[o]) delete baseSnap[o][d]; } });
+      Object.keys(r.data[o]).forEach(function(d){ if(d.slice(0,7)!==ym) return;
+        data[o][d] = r.data[o][d];
+        if(baseSnap){ (baseSnap[o]=baseSnap[o]||{})[d] = cloneJSON(r.data[o][d]); }
+      });
+    });
+  });
+  knownMt = r.mt;
 }
 /* 統一入口：先試分段，後端不支援就退回整包 */
 async function fetchRemote(onProgress){
@@ -684,7 +761,8 @@ async function fetchJSON(url, opt){
 }
 async function fetchJSONRaw(url, opt){
   const ctl = new AbortController();
-  const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
+  const tmo = fastBackend ? 15000 : FETCH_TIMEOUT;
+  const timer = setTimeout(()=>ctl.abort(), tmo);
   try{
     const r = await fetch(url, Object.assign({signal:ctl.signal}, opt||{}));
     if(!r.ok) throw new Error("HTTP " + r.status);
@@ -696,7 +774,7 @@ async function fetchJSONRaw(url, opt){
     if(j.gz) return await gunzipB64(j.gz);      // 後端壓縮過的回應
     return j;
   }catch(e){
-    throw new Error(e.name === "AbortError" ? "逾時未回應（" + (FETCH_TIMEOUT/1000) + "秒）" : (e.message || String(e)));
+    throw new Error(e.name === "AbortError" ? "逾時未回應（" + (tmo/1000) + "秒）" : (e.message || String(e)));
   }finally{ clearTimeout(timer); }
 }
 async function fetchJSONRetry(url, opt, tries){
@@ -707,7 +785,7 @@ async function fetchJSONRetry(url, opt, tries){
     catch(e){
       last = e;
       /* Apps Script 冷啟動時會間歇回 404／逾時，退避久一點比較容易撐過去 */
-      if(i < tries-1) await new Promise(r=>setTimeout(r, 2000 * Math.pow(2, i)));
+      if(i < tries-1) await new Promise(r=>setTimeout(r, (fastBackend ? 700 : 2000) * Math.pow(2, i)));
     }
   }
   throw last;
@@ -736,8 +814,10 @@ function countDays(d){
   return Object.keys(d.ivy||{}).length + Object.keys(d.tree||{}).length;
 }
 /* 本機備份：不論有沒有開共用，任何一次變更都先落地，避免只存在記憶體 */
-function backupLocal(){
-  try{ localStorage.setItem(BACKUP_KEY, JSON.stringify({data, savedAt:Date.now(), synced:false})); }catch(e){}
+function backupLocal(pending){
+  /* pending = {touched, deletes, patch, base}：這次要送的那幾天、以及開始改之前的版本。
+     ★ 救援時只重送這幾天（伺服器會和別人的修改合併），絕不再用整份舊資料覆蓋。 */
+  try{ localStorage.setItem(BACKUP_KEY, JSON.stringify({data, savedAt:Date.now(), synced:false, pending:pending||null})); }catch(e){}
 }
 function markBackupSynced(){
   try{
@@ -750,7 +830,9 @@ function readBackup(){
 }
 function hasUnsyncedBackup(){
   const b = readBackup();
-  return !!(b && !b.synced && b.data && countDays(b.data));
+  if(!b || b.synced) return false;
+  if(b.pending) return (b.pending.touched||[]).length + (b.pending.deletes||[]).length > 0;
+  return !!(b.data && countDays(b.data));
 }
 
 function initUser(){
@@ -778,7 +860,7 @@ async function loadData(){
                 " 天）｜唯讀中，正在取得最新…");
       try{ render(); }catch(e){}
     }else{
-      setStatus("⏳ 載入共用資料中…（Apps Script 冷啟動可能要 30 秒，請稍候）");
+      setStatus("⏳ 載入共用資料中…");
     }
     try{
       const j = await fetchRemote(function(done, total){
@@ -787,6 +869,7 @@ async function loadData(){
       });
       data = j.data;
       lastUpdatedAt = j.updatedAt || 0;
+      knownMt = j.mt || null;
       remoteOK = true;
       lastRemoteDays = countDays(data);
       migrateAll();
@@ -871,12 +954,14 @@ function saveDataFull(){
         }
       }
       try{
-        const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName})});
+        const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({data, user:userName, nurseUnlock:[...nurseUnlock]})});
+        nurseUnlock.clear();
         lastUpdatedAt = j.updatedAt || Date.now();
         lastRemoteDays = nNow;
         setBase();
         markBackupSynced();
         setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `（${userName}）｜${nNow} 天`);
+        handleNurseKept(j);
       }catch(e){
         setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，請按 🔄 同步重試");
         toast("⚠ 上傳失敗，但資料已存在本機備份，不會遺失");
@@ -914,6 +999,7 @@ async function saveMerge(touched, deletes){
     toast("⚠ 資料還在取得最新版本，請稍候再改");
     return false;
   }
+  if(fastBackend) return saveMergeServer(touched, deletes);
   pendingSave = true;
   /* ★ 衝突檢查（2026-09-23 新增）：先看共用資料庫在我上次同步之後有沒有被別人改過。
      有的話，只抓這幾天所在的月份，以「區」為單位和我的修改合併後再送，
@@ -967,9 +1053,10 @@ async function saveMerge(touched, deletes){
   if(!nDays){ pendingSave = false; return true; }
   setStatus(`儲存中…（增量：${nDays} 天）`);
   backupLocal();
+  const unlockKeys = unlockKeysFor(touched, deletes);
   try{
     const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({
-      mode:"merge", patch:patch, deletes:deletes, user:userName
+      mode:"merge", patch:patch, deletes:deletes, user:userName, nurseUnlock:unlockKeys
     })});
     if(j.mode !== "merge"){
       /* 後端還是舊版（沒認得 mode），退回整包覆蓋 */
@@ -999,6 +1086,8 @@ async function saveMerge(touched, deletes){
     }else if(othersChanged){
       toast("已和其他人剛做的修改合併後儲存");
     }
+    unlockKeys.forEach(k=>nurseUnlock.delete(k));   // 解鎖只用一次
+    if(handleNurseKept(j)) return true;
     if(othersChanged) setTimeout(function(){ pollRemote(true); }, 300);
     return true;
   }catch(e){
@@ -1007,6 +1096,112 @@ async function saveMerge(touched, deletes){
     toast("⚠ 上傳失敗（資料已存本機備份）：" + e.message);
     return false;
   }finally{ pendingSave = false; }
+}
+
+/* ===== 新後端：把「開始改之前的版本」一起送，由伺服器一次完成三方合併 =====
+   伺服器在同一個物件裡排隊處理，不會有「檢查完、還沒寫入時別人插隊」的空檔。
+   回傳的 result 就是資料庫裡的最終內容，直接套用，不必整包重抓。 */
+let saveRetryCount = 0;
+async function saveMergeServer(touched, deletes){
+  pendingSave = true; editSeq++;
+  const patch = {}, base = { ivy:{}, tree:{} };
+  touched.forEach(function(t){
+    const o=t[0], d=t[1];
+    if(!data[o] || !data[o][d]) return;
+    (patch[o] = patch[o] || {})[d] = cloneJSON(data[o][d]);
+    const b = baseDay(o,d); base[o][d] = b === undefined ? null : cloneJSON(b);
+  });
+  deletes.forEach(function(k){ const p=k.split("|"), b=baseDay(p[0],p[1]); base[p[0]][p[1]] = b === undefined ? null : cloneJSON(b); });
+  const nDays = Object.keys(patch).reduce((s,o)=>s+Object.keys(patch[o]).length, 0) + deletes.length;
+  if(!nDays){ pendingSave = false; return true; }
+  setStatus(`儲存中…（${nDays} 天）`);
+  backupLocal({ touched:touched, deletes:deletes, patch:patch, base:base });
+  const unlockKeys = unlockKeysFor(touched, deletes);
+  try{
+    const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({
+      mode:"merge", patch:patch, deletes:deletes, base:base, user:userName, nurseUnlock:unlockKeys
+    })});
+    if(j.mode !== "merge" || !j.result) throw new Error("後端版本不符（沒有回傳合併結果）");
+    unlockKeys.forEach(k=>nurseUnlock.delete(k));
+    saveRetryCount = 0;
+    if(!baseSnap) baseSnap = { ivy:{}, tree:{} };
+    ["ivy","tree"].forEach(function(o){
+      Object.keys(j.result[o] || {}).forEach(function(d){
+        const r = j.result[o][d], sent = patch[o] && patch[o][d], now = data[o][d];
+        if(r === null){
+          if(!dirtyDays.has(o+"|"+d)) delete data[o][d];
+          if(baseSnap[o]) delete baseSnap[o][d];
+          return;
+        }
+        /* 等待回應的這段時間使用者又改了同一天 → 把伺服器結果和新修改再合併一次 */
+        if(sent !== undefined && now !== undefined && !sameJSON(now, sent)) data[o][d] = mergeDay(sent, now, r, [], "");
+        else data[o][d] = cloneJSON(r);
+        (baseSnap[o] = baseSnap[o] || {})[d] = cloneJSON(r);
+        Object.values(data[o][d]).forEach(normalizeRec);
+      });
+    });
+    /* 我寫入之前沒有別人寫過 → 直接跟上最新；否則留給輪詢只抓有變的月份 */
+    if(j.prevUpdatedAt === lastUpdatedAt){ lastUpdatedAt = j.updatedAt; if(j.mt) knownMt = j.mt; }
+    if(j.days) lastRemoteDays = j.days;
+    saveCache();
+    if(!hasPendingAfter(touched, deletes)) markBackupSynced();
+    setStatus(`✓ 已同步｜本次更新 ${j.applied||0} 天` + ((j.deleted||0)?`、刪除 ${j.deleted} 天`:"") +
+              `｜共 ${j.days||"?"} 天｜` + fmtDT(j.updatedAt || Date.now()) + `（${userName}）`);
+    render();
+    const kept = j.nurseKept || [];
+    if(kept.length){
+      const ex = kept.slice(0,3).map(k=>`${k.date.slice(5)} ${k.zone}區 ${k.nurse}`).join("、");
+      toast(`🔒 已保留 ${kept.length} 區已鎖定的護理師（${ex}${kept.length>3?" 等":""}）。要更改請點護理師格並確認解鎖`);
+    }else if((j.conflicts||[]).length){
+      toast(`ℹ 和其他人同時的修改已自動合併：${j.conflicts.slice(0,3).join("；")}${j.conflicts.length>3?" 等":""}`);
+    }
+    if(j.prevUpdatedAt !== lastUpdatedAt) setTimeout(function(){ pollRemote(true); }, 200);
+    return true;
+  }catch(e){
+    restoreDirty(touched, deletes);
+    setStatus("⚠ 同步失敗：" + e.message + "｜變更已存本機備份，會自動重試，也可按 🔄 同步");
+    toast("⚠ 上傳失敗（資料已存本機備份）：" + e.message);
+    /* 自動重試最多 3 次（每次間隔拉長），之後交給使用者按 🔄 同步 */
+    if(++saveRetryCount <= 3) setTimeout(function(){ if(dirtyDays.size || deletedDays.size) saveData(); }, 5000 * saveRetryCount);
+    return false;
+  }finally{ pendingSave = false; editSeq++; }
+}
+function hasPendingAfter(touched, deletes){ return dirtyDays.size > 0 || deletedDays.size > 0; }
+
+/* ===== 變更紀錄（新後端）===== */
+async function openHistory(){
+  if(!editing || !fastBackend) return;
+  const org = editing.org, d = editing.dateISO;
+  document.getElementById('histTitle').textContent = `📜 ${ORG_NAME[org]} ${d} 變更紀錄`;
+  const body = document.getElementById('histBody');
+  body.innerHTML = "讀取中…";
+  document.getElementById('histModalBg').classList.add('show');
+  try{
+    const j = await fetchJSONRetry(SYNC_URL + "?history=1&org=" + org + "&date=" + d + "&t=" + Date.now());
+    if(!j.items.length){ body.innerHTML = "<div style='color:var(--muted)'>還沒有紀錄（搬到新後端之後的修改才會記錄）</div>"; return; }
+    body.innerHTML = j.items.map(function(it){
+      const act = {edit:"修改", delete:"刪除", restore:"還原", full:"整包上傳"}[it.action] || it.action;
+      return `<div style="border-bottom:1px solid var(--line);padding:6px 2px;font-size:12.5px;">
+        <b>${fmtDT(it.ts)}</b>　${escapeHtml(it.user||"?")}　<span style="color:var(--muted)">${act}</span>
+        <div style="margin:3px 0 4px;">${(it.summary||[]).map(escapeHtml).join("<br>") || "（無內容變化）"}</div>
+        <button class="btn" style="font-size:11.5px;padding:2px 9px;" onclick="restoreHist(${it.id})">↩ 還原到這次之前</button>
+      </div>`;
+    }).join("");
+  }catch(e){ body.innerHTML = "讀取失敗：" + escapeHtml(e.message); }
+}
+function closeHistory(){ document.getElementById('histModalBg').classList.remove('show'); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+async function restoreHist(id){
+  if(!confirm("確定把這一天還原到這次修改之前的樣子？\n（只影響這一天；已指定的護理師會保留；之後仍可再還原回來）")) return;
+  try{
+    const j = await fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({mode:"restoreDay", id:id, which:"before", user:userName})});
+    if(j.day){ data[j.org][j.date] = j.day; Object.values(j.day).forEach(normalizeRec); }
+    else delete data[j.org][j.date];
+    if(baseSnap){ if(j.day) (baseSnap[j.org]=baseSnap[j.org]||{})[j.date] = cloneJSON(j.day); else if(baseSnap[j.org]) delete baseSnap[j.org][j.date]; }
+    if(j.prevUpdatedAt === lastUpdatedAt){ lastUpdatedAt = j.updatedAt; if(j.mt) knownMt = j.mt; }
+    saveCache(); render(); closeHistory(); closeModal();
+    toast("已還原 " + j.date);
+  }catch(e){ toast("⚠ 還原失敗：" + e.message); }
 }
 
 /* ===== 自動拉取他人更新 ===== */
@@ -1038,10 +1233,24 @@ async function pollRemoteInner(force){
         setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (idx.user?`（${idx.user}）`:"") + `｜${lastRemoteDays} 天`);
         return;
       }
+      const seq0 = editSeq;
+      if(fastBackend && knownMt && idx.mt){
+        const part = await fetchChangedParts(idx);
+        /* ★ 抓的期間有人存檔或又改了東西 → 這份已經舊了，不套用，下一輪再抓 */
+        if(pendingSave || dirtyDays.size || deletedDays.size || editSeq !== seq0) return;
+        applyChangedParts(part);
+        lastUpdatedAt = idx.updatedAt;
+        lastRemoteDays = idx.total || countDays(data);
+        migrateAll(); saveCache(); render();
+        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + (idx.user?`（${idx.user}）`:"") + `｜${lastRemoteDays} 天`);
+        return;
+      }
       const full = await fetchAllParts(function(done, total){
         setStatus("⏳ 取得他人更新中…（" + done + " / " + total + " 批）");
       });
-      if(pendingSave || dirtyDays.size || deletedDays.size) return;   // ★ 抓的期間使用者又改了東西 → 這次先不換，免得把剛改的洗掉
+      /* ★ 抓的期間使用者又改了東西、或剛存完檔（editSeq 變了）→ 這份是舊的，不換，免得把剛改的洗掉 */
+      if(pendingSave || dirtyDays.size || deletedDays.size || editSeq !== seq0) return;
+      knownMt = full.mt || null;
       data = full.data;
       lastUpdatedAt = full.updatedAt;
       lastRemoteDays = full.total;
@@ -1076,30 +1285,9 @@ async function pollRemoteInner(force){
 async function manualSync(){
   if(!hasRemote){ toast("尚未設定共用資料庫（見 部署教學.md）"); return; }
   setStatus("同步中…");
-  if(hasUnsyncedBackup()){
-    /* ★ 本機有還沒上傳的變更：先確認遠端可用，再讓使用者決定方向，
-       不能像以前那樣直接用遠端內容蓋掉畫面。 */
-    try{
-      const j = await fetchRemote(function(done, total){
-        setStatus("⏳ 取得共用資料中…（" + done + " / " + total + " 批）");
-      });
-      remoteOK = true;
-      lastRemoteDays = countDays(j.data);
-      const mine = countDays(data), theirs = lastRemoteDays;
-      if(confirm(`連線已恢復。\n\n目前畫面（本機未上傳）：${mine} 天\n共用資料庫：${theirs} 天\n最後更新：${fmtDT(j.updatedAt||0)}${j.user?`（${j.user}）`:""}\n\n【確定】把本機這份上傳，覆蓋共用資料庫\n【取消】改用共用資料庫的內容，放棄本機未上傳的變更`)){
-        saveData();   // 有記到異動就走增量，否則整包
-      }else{
-        data = j.data; lastUpdatedAt = j.updatedAt || 0; clearDirty(); migrateAll(); setBase();
-        markBackupSynced(); render();
-        setStatus("✓ 已同步｜最後更新：" + fmtDT(lastUpdatedAt) + `｜${theirs} 天`);
-        toast("已改用共用資料庫的內容");
-      }
-    }catch(e){
-      setStatus("⚠ 同步失敗：" + e.message + "｜仍為唯讀，變更保留在本機備份");
-      toast("⚠ 還是連不上：" + e.message);
-    }
-    return;
-  }
+  /* 有還沒送出的修改 → 直接重送那幾天（伺服器會和別人的修改合併），不再整包覆蓋 */
+  if(dirtyDays.size || deletedDays.size){ saveData(); return; }
+  if(hasUnsyncedBackup()){ offerBackupRecovery(); return; }
   await pollRemote(true);
   if(!remoteOK) scheduleReconnect();
 }
@@ -1108,13 +1296,41 @@ async function manualSync(){
 function offerBackupRecovery(){
   if(!hasUnsyncedBackup()) return;
   const b = readBackup();
-  const mine = countDays(b.data), theirs = countDays(data);
-  if(confirm(`偵測到一份「沒有成功上傳」的本機備份：\n　${fmtDT(b.savedAt)}　共 ${mine} 天\n共用資料庫目前：${theirs} 天\n\n【確定】改用這份本機備份（之後可再按 🔄 同步上傳）\n【取消】保留共用資料庫的內容（備份不會刪除）`)){
-    data = b.data; clearDirty(); migrateAll(); render();
-    toast("已改用本機備份，確認無誤後請按 🔄 同步上傳");
-  }else{
-    markBackupSynced();
+  if(b.pending){
+    /* ★ 只列出「沒上傳成功的那幾天」，確定後只重送那幾天；伺服器會和別人在這段時間的修改合併 */
+    const P = b.pending, list = [];
+    (P.touched||[]).forEach(t=>list.push(`${ORG_NAME[t[0]]} ${t[1]}`));
+    (P.deletes||[]).forEach(k=>{ const p=k.split("|"); list.push(`${ORG_NAME[p[0]]} ${p[1]}（刪除）`); });
+    if(confirm(`有 ${list.length} 天的修改上次沒有上傳成功（${fmtDT(b.savedAt)}）：\n　${list.slice(0,8).join("\n　")}${list.length>8?"\n　…":""}\n\n【確定】重新上傳這幾天（會自動和別人的修改合併，不會蓋掉別人改的）\n【取消】放棄這幾天的修改`)){
+      (P.touched||[]).forEach(function(t){
+        const o=t[0], d=t[1], day = P.patch && P.patch[o] && P.patch[o][d];
+        if(!day) return;
+        data[o][d] = cloneJSON(day);
+        if(!baseSnap) baseSnap = { ivy:{}, tree:{} };
+        const bd = P.base && P.base[o] ? P.base[o][d] : null;
+        if(bd) (baseSnap[o]=baseSnap[o]||{})[d] = cloneJSON(bd); else if(baseSnap[o]) delete baseSnap[o][d];
+        markDirty(o, d);
+      });
+      (P.deletes||[]).forEach(function(k){
+        const p=k.split("|"), bd = P.base && P.base[p[0]] ? P.base[p[0]][p[1]] : null;
+        if(bd && baseSnap) (baseSnap[p[0]]=baseSnap[p[0]]||{})[p[1]] = cloneJSON(bd);
+        delete data[p[0]][p[1]]; markDeleted(p[0], p[1]);
+      });
+      migrateAll(); render(); saveData();
+      toast("正在重新上傳上次沒送出的修改…");
+    }else{
+      markBackupSynced();
+    }
+    return;
   }
+  /* 舊格式備份（整份資料）：不再提供「整份蓋回去」，只提供下載讓人工比對 */
+  if(confirm(`偵測到一份舊格式的本機備份（${fmtDT(b.savedAt)}，${countDays(b.data)} 天）。\n為了避免整份舊資料蓋掉別人的修改，系統不再自動還原。\n\n【確定】下載這份備份檔（之後可人工比對）\n【取消】忽略`)){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(b)],{type:'application/json'}));
+    a.download = `care-schedule-本機備份_${new Date(b.savedAt||Date.now()).toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+    a.click();
+  }
+  markBackupSynced();
 }
 function exportBackup(){
   const payload = {data, updatedAt:lastUpdatedAt, exportedAt:Date.now(), user:userName,
@@ -1132,7 +1348,8 @@ async function importBackup(file){
     if(!d || (!d.ivy && !d.tree)) throw new Error("檔案內容不是本系統的備份");
     const ni = Object.keys(d.ivy||{}).length, nt = Object.keys(d.tree||{}).length;
     const ci = Object.keys(data.ivy||{}).length, ct = Object.keys(data.tree||{}).length;
-    if(!confirm(`要用這份備份取代目前資料嗎？\n\n備份：常春藤 ${ni} 天、長青樹 ${nt} 天\n目前：常春藤 ${ci} 天、長青樹 ${ct} 天\n\n確定後會寫入共用資料庫（若目前是唯讀模式則只存本機）。`)) return;
+    if(!confirm(`要用這份備份取代目前資料嗎？\n\n備份：常春藤 ${ni} 天、長青樹 ${nt} 天\n目前：常春藤 ${ci} 天、長青樹 ${ct} 天\n\n⚠ 這會把所有日期改回備份裡的樣子，蓋掉所有人在這份備份之後的修改（已指定的護理師除外）。\n只是要找回某一天，請改用該格的「📜 變更紀錄」還原。\n\n確定後會寫入共用資料庫（若目前是唯讀模式則只存本機）。`)) return;
+    if(hasRemote && !confirm("再確認一次：真的要用備份取代『全部』資料嗎？")) return;
     data = {ivy: d.ivy||{}, tree: d.tree||{}};
     clearDirty();                    // 整包還原：走整包覆蓋，不是增量
     migrateAll(); render(); saveDataFull();
@@ -1711,7 +1928,8 @@ function render(){
         : over
         ? `<span style="color:#c0392b;font-weight:bold;" title="本月已累積 ${nLoad} 案（上限 ${CASE_LIMIT}）">${nurse}<br><span style="font-size:10px;">⚠${nLoad}案</span></span>`
         : nurse;
-      html += `<td class="nurse${over?' overload':''}" onclick="editNurse('${dateISO}','${z}',event)" title="點擊選擇護理師">${nurseHtml}</td>`;
+      const lockMark = nurse ? `<span style="font-size:10px;opacity:.55;margin-right:1px;">🔒</span>` : "";
+      html += `<td class="nurse${over?' overload':''}" onclick="editNurse('${dateISO}','${z}',event)" title="${nurse?'🔒 已鎖定：點擊可解鎖更改（會先確認）':'點擊選擇護理師'}">${lockMark}${nurseHtml}</td>`;
       html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
@@ -2210,7 +2428,9 @@ function editNurse(dateISO, zone, ev){
     const v = sel.value;
     if(v==="__add__"){
       const name=addNurse(curOrg);
-      if(name){ ensureCell(curOrg, dateISO, zone).nurse=name; markDirty(curOrg, dateISO); saveData(); }
+      if(name && confirmNurseUnlock(curOrg, dateISO, zone, cur, name)){
+        ensureCell(curOrg, dateISO, zone).nurse=name; markDirty(curOrg, dateISO); saveData();
+      }
       render(); return;
     }
     if(v==="__manage__"){ render(); openNurseMgr(); return; }
@@ -2219,6 +2439,7 @@ function editNurse(dateISO, zone, ev){
        !confirm(`${v} 本月已累積 ${vc} 案（上限 ${CASE_LIMIT}）。\n確定仍要排這一班？`)){
       render(); return;
     }
+    if(!confirmNurseUnlock(curOrg, dateISO, zone, cur, v)){ render(); return; }   // 🔒 已指定 → 要確認才能改／清除
     ensureCell(curOrg, dateISO, zone).nurse = v;
     markDirty(curOrg, dateISO);
     saveData(); render();
@@ -2565,13 +2786,14 @@ function navMonth(dir){
 }
 function clearMonth(){
   if(hasRemote && !remoteOK){ toast("🔒 唯讀模式：連線恢復前不能清除資料"); return; }
-  if(!confirm(`確定清除 ${ORG_NAME[curOrg]} ${curYM} 的所有資料？`)) return;
+  if(!confirm(`確定清除 ${ORG_NAME[curOrg]} ${curYM} 的所有資料？\n\n🔒 已指定護理師的日期不會被刪除（要刪請先逐格解鎖）。`)) return;
   for(const d of Object.keys(data[curOrg])) if(d.startsWith(curYM)){ markDeleted(curOrg, d); delete data[curOrg][d]; }
   saveData(); render(); toast("已清除本月資料");
 }
 
 /* ===== 快選 Modal ===== */
 function openModal(dateISO, zone){
+  try{ document.getElementById('histBtn').style.display = fastBackend ? "" : "none"; }catch(e){}
   hideTipNow();
   editing = {org:curOrg, dateISO, zone};
   const rec = getRec(curOrg, dateISO, zone);
@@ -2649,6 +2871,8 @@ function saveCell(){
 function deleteCell(){
   if(!editing) return;
   const rec = data[editing.org][editing.dateISO];
+  const zr = rec && rec[editing.zone];
+  if(zr && zr.nurse && !confirmNurseUnlock(editing.org, editing.dateISO, editing.zone, zr.nurse, null)) return;
   if(rec){
     delete rec[editing.zone];
     if(Object.keys(rec).length===0){ delete data[editing.org][editing.dateISO]; markDeleted(editing.org, editing.dateISO); }
@@ -2731,10 +2955,15 @@ document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.targ
        原本每 45 秒一次，一個人開 8 小時就是 640 次（約 21 分鐘），
        四個人同時開著幾乎就把配額用光 —— 而且大家常常「開著沒在看」。
        改成 3 分鐘一次，而且分頁切到背景就完全不輪詢。 */
-    setInterval(function(){ if(!document.hidden) pollRemote(); }, POLL_MS);
+    /* ★ 新後端每次只要零點幾秒：每 20 秒看一次索引（約 3 KB），有變才抓有變的月份。
+       舊後端（Apps Script）維持 3 分鐘。分頁在背景時都不輪詢。 */
+    setInterval(function(){
+      if(document.hidden) return;
+      if(!fastBackend && Date.now() - lastPollAt < POLL_MS) return;
+      pollRemote();
+    }, 20000);
     document.addEventListener('visibilitychange', function(){
-      // 切回前台時補抓一次，但距離上次不到 30 秒就不重複打
-      if(!document.hidden && Date.now() - lastPollAt > 30000) pollRemote();
+      if(!document.hidden && Date.now() - lastPollAt > (fastBackend ? 5000 : 30000)) pollRemote();
     });
   }
 })();
