@@ -19,6 +19,7 @@
  *   POST {mode:"merge", patch, deletes, base, nurseUnlock, user}
  *   POST {mode:"leave", org, add, remove, user}
  *   POST {mode:"nurses", org, cfg, user}
+ *   POST {mode:"report", text, user}        每日上傳報告（clear:true 清空）
  *   POST {mode:"restoreDay", id, which:"before"|"after", user}
  *   POST {data, user, force?}            舊網頁整包覆蓋（有暴跌防呆與護理師鎖定）
  *   POST {mode:"import", token, key, text}   搬家用（需環境變數 IMPORT_TOKEN）
@@ -295,6 +296,18 @@ export class ScheduleDB {
       return j;
     } catch (e) { return { ivy: { add: [], del: [] }, tree: { add: [], del: [] } }; }
   }
+  /* 每日上傳報告：只存一份，每天覆蓋；前端按「已閱讀」會送 clear:true 清空 */
+  readReport() {
+    try {
+      const j = JSON.parse(this.kvGet('report.json', '{}'));
+      return {
+        date: String(j.date || ''),
+        text: String(j.text || ''),
+        at: j.at || 0,
+        user: String(j.user || ''),
+      };
+    } catch (e) { return { date: '', text: '', at: 0, user: '' }; }
+  }
   addHist(user, org, date, action, before, after) {
     const sum = summarize(before, after);
     this.sql.exec(`INSERT INTO hist (ts, user, org, date, action, before, after, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -336,6 +349,7 @@ export class ScheduleDB {
         days: idx.days, total: idx.total,
         leave: this.readLeave(), leaveUpdatedAt: idx.leaveUpdatedAt || 0,
         nurses: this.readNurses(),
+        report: this.readReport(),
         mt: this.partTimes(),
       });
     }
@@ -427,6 +441,24 @@ export class ScheduleDB {
       this.bump(idx, user);
       this.writeIdx(idx);
       return json({ ok: true, mode: 'nurses', updatedAt: idx.updatedAt, nurses: ns });
+    }
+
+    /* 每日上傳報告：流程跑完 POST 進來，前端從 ?index=1 一起拿到。
+       刻意不 bump(idx)：報告不是排班資料，bump 會害所有人誤以為資料變了而重抓分頁。 */
+    if (body.mode === 'report') {
+      if (body.clear) {                       // 前端按「已閱讀」
+        this.kvSet('report.json', JSON.stringify({ date: '', text: '', at: 0, user: '' }));
+        return json({ ok: true, mode: 'report', cleared: true, report: { date: '', text: '' } });
+      }
+      const tpe = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);  // 台北時區的今天
+      const r = {
+        date: DAY_RE.test(String(body.date || '')) ? String(body.date) : tpe,
+        text: String(body.text || '').slice(0, 20000),
+        at: Date.now(),
+        user: user || '每日流程',
+      };
+      this.kvSet('report.json', JSON.stringify(r));
+      return json({ ok: true, mode: 'report', report: r });
     }
 
     if (body.mode === 'restoreDay') {
