@@ -143,7 +143,6 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <body>
 <div class="wrap">
   <h1>📋 居護行程動態表</h1>
-  <div class="sub">上傳 Excel 自動解析｜🖱 拖到空白處＝獨立搬區、<b>拖到另一標籤上＝合併成大群</b>｜點標籤釘選後<b>勾選個案可拆分小標籤</b>，可無限細分｜標籤數字＝人數</div>
 
   <div class="tabs">
     <div class="tab active" data-org="ivy" onclick="switchOrg('ivy')">常春藤</div>
@@ -152,7 +151,6 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 
   <div class="upload" id="dropzone" onclick="document.getElementById('fileInput').click()">
     <b>📄 點擊或拖曳 Excel(.xlsx) 到這裡上傳</b>（可一次多個檔案）
-    <div class="hint">自動判別 常春藤／長青樹、訪視日期、各分區人數、行政區、每筆個案的姓名地址備註｜依表頭欄位對應解析</div>
     <input type="file" id="fileInput" accept=".xlsx,.xls" multiple>
   </div>
 
@@ -197,10 +195,16 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 
   <div class="table-card"><table id="mainTable"></table></div>
 
-  <details class="legend" id="legendBox">
-    <summary style="cursor:pointer;font-size:13.5px;color:var(--brand);font-weight:bold;user-select:none;">🎨 鄰近區顏色圖例（點擊展開／收合）</summary>
-    <div id="legendBody" style="margin-top:8px;"></div>
-  </details>
+  <!-- 今日上傳報告（看完按「已閱讀」即刪除，不保留） -->
+  <div class="legend" id="reportBox">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <b style="color:var(--brand);font-size:13.5px;">📋 今日上傳報告</b>
+      <span id="reportMeta" style="font-size:11.5px;color:var(--muted);"></span>
+      <span style="flex:1;"></span>
+      <button class="btn primary" id="reportReadBtn" onclick="dismissReport()" style="display:none;">✓ 已閱讀</button>
+    </div>
+    <div id="reportBody" style="font-size:12.5px;line-height:1.65;margin-top:8px;"></div>
+  </div>
 </div>
 
 <!-- 個案名單浮標視窗 -->
@@ -208,7 +212,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
   <div class="tip-head">
     <h4 id="tipTitle"></h4>
     <span style="display:flex;align-items:center;gap:6px;">
-      <span class="hint" id="tipHint">點標籤可釘選</span>
+      <span class="hint" id="tipHint"></span>
       <span class="tip-close" onclick="hideTipNow()">✕</span>
     </span>
   </div>
@@ -241,7 +245,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     </div>
     <label>📋 目前名單（點 ✕ 刪除，預設與自訂都可刪）</label>
     <div class="selected-area" id="nurseMgrList" style="max-height:240px;overflow:auto;"></div>
-    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">刪除只是從選單移除，已排好的班不會被更動；刪掉的預設護理師可用上面「新增」加回來。</div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">刪除不影響已排好的班，之後可再新增回來。</div>
     <div class="acts"><button class="btn primary" onclick="closeNurseMgr()">關閉</button></div>
   </div>
 </div>
@@ -264,7 +268,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
       <input type="date" id="leaveTo" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">
     </div>
     <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">
-      範圍內的每一天都會登記（含週末）。
+      含週末。
     </div>
 
     <label>📝 事由（選填）</label>
@@ -299,7 +303,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
     <label>👥 人數</label>
     <input type="number" id="editCount" min="0" oninput="updateCountHint()">
     <div id="countHint" style="font-size:11.5px;color:var(--muted);margin-top:3px;"></div>
-    <label>📍 已選標籤（依順序，可同名並存，點 × 移除）</label>
+    <label>📍 已選標籤</label>
     <div class="selected-area" id="selectedArea"></div>
     <label>🎯 點選新增行政區（同組同色）</label>
     <div id="pickerGroups"></div>
@@ -321,7 +325,7 @@ td.dists.dropover{outline:3px dashed var(--brand2); outline-offset:-3px; backgro
 <div class="modal-bg" id="histModalBg" style="z-index:70;">
   <div class="modal">
     <h3 id="histTitle">📜 變更紀錄</h3>
-    <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;">最近 60 筆，新的在上面。「還原到這次之前」只會影響這一天，而且已指定的護理師不會被舊版本蓋掉。</div>
+    <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;">最近 60 筆。還原只影響這一天，護理師指定不會被蓋掉。</div>
     <div id="histBody" style="max-height:360px;overflow:auto;"></div>
     <div class="acts"><button class="btn primary" onclick="closeHistory()">關閉</button></div>
   </div>
@@ -664,6 +668,15 @@ async function fetchIndex(){
   if(j.nurses){                       // 後端已支援名單同步
     nurseData = normNurseData(j.nurses);
     nursesRemote = true;
+  }
+  if(j.report && j.report.text && j.report.date===todayISO_() && !reportReadToday()){
+    const had = !!getReport();
+    setReport(j.report.text, '每日流程');     // 後端有今天、且還沒讀過的報告
+    reportRemote = true;
+    /* 輪詢時 updatedAt 沒變會提早 return、不會跑到 render()，
+       所以這裡直接刷新報告面板，新報告才會自己跳出來 */
+    if(!had){ try{ renderReport(); toast("今日上傳報告已送達"); }catch(e){} }
+    else { try{ renderReport(); }catch(e){} }
   }
   return j;
 }
@@ -1890,8 +1903,7 @@ function render(){
       ondragstart="zoneDragStart(event,'${z}')" ondragend="zoneDragEnd()"
       ondragover="zoneDragOver(event)" ondragleave="zoneDragLeave(event)" ondrop="zoneDrop(event,'${z}')"
       onclick="toggleZone('${z}')" title="點擊顯示/隱藏，拖曳可換位">${z}區</span>`).join('') +
-    `<span class="zchip all" onclick="showAllZones()">全部顯示</span>
-     <span style="font-size:11px;color:var(--muted);">（拖曳晶片可調整欄位左右順序）</span>`;
+    `<span class="zchip all" onclick="showAllZones()">全部顯示</span>`;
   const todayISO = new Date().toISOString().slice(0,10);
   const loadCache = {};                            // 各月案量，每月只算一次
   const loadOf = ym => loadCache[ym] || (loadCache[ym] = nurseLoadMap(curOrg, ym));
@@ -1967,15 +1979,9 @@ function render(){
   }
   html += "</tbody>";
   document.getElementById('mainTable').innerHTML = html;
-  renderLegend();
+  renderReport();
 }
-function renderLegend(){
-  let h = `<div style="font-size:12px;color:var(--muted);margin-bottom:5px;">${ORG_NAME[curOrg]}｜拖到空白處＝獨立、拖到標籤上＝合併大群、釘選後勾選拆分、✕ 移除、「＋」新增</div>`;
-  GROUPS[curOrg].forEach((g,i)=>{
-    h += `<div class="row"><div class="sw" style="background:${g.color}"></div><b>${i+1}.</b> ${g.names.join("、")}</div>`;
-  });
-  document.getElementById('legendBody').innerHTML = h;
-}
+
 
 /* ===== 拖曳搬移 ===== */
 function dragStart(ev, dateISO, zone, idx){
@@ -2223,7 +2229,7 @@ function chipEnter(ev, dateISO, zone, idx){
   tipKey = key;
   tipEl.style.display = "block";
   tipEl.classList.remove('pinned');
-  document.getElementById('tipHint').textContent = "點標籤釘選後，可勾選拆分或拖曳個案列搬區";
+  document.getElementById('tipHint').textContent = "點一下可釘選";
   positionTip(ev.currentTarget);
 }
 function chipLeave(){ scheduleTipHide(); }
@@ -2243,7 +2249,7 @@ function chipPin(ev, dateISO, zone, idx){
   tipPinned = true;
   tipEl.style.display = "block";
   tipEl.classList.add('pinned');
-  document.getElementById('tipHint').textContent = "已釘選｜勾選個案可拆分小標籤，或拖曳⠿單獨搬移";
+  document.getElementById('tipHint').textContent = "已釘選";
   positionTip(ev.currentTarget);
 }
 function hideTipNow(){
@@ -2281,6 +2287,100 @@ function quickRemove(ev, dateISO, zone, idx){
 
 /* ===== 操作 ===== */
 /* ===== 護理師名單（預設 + 使用者自訂，可自行新增／移除）===== */
+/* ═══════════ 今日上傳報告 ═══════════
+   每天流程跑完的小報告，只顯示「今天」那份；按「已閱讀」即刪除，不做長期保存。
+   來源二擇一：① 雲端（後端回傳 j.report 時自動帶入）② 手動貼上。
+   報告內容只留在這台電腦的 localStorage，換日自動失效。            */
+const REPORT_KEY = 'careone-report';
+let reportRemote = false;
+
+function todayISO_(){ const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
+function getReport(){
+  try{
+    const r=JSON.parse(localStorage.getItem(REPORT_KEY)||'null');
+    if(r && r.date===todayISO_() && r.text) return r;       // 只認今天的
+    if(r) localStorage.removeItem(REPORT_KEY);              // 過期自動清掉
+  }catch(e){}
+  return null;
+}
+function setReport(text, from){
+  try{ localStorage.setItem(REPORT_KEY, JSON.stringify({date:todayISO_(), text:String(text||''), from:from||'貼上'})); }catch(e){}
+}
+const REPORT_READ_KEY = 'careone-report-read';
+function reportReadToday(){
+  try{ return (JSON.parse(localStorage.getItem(REPORT_READ_KEY)||'null')||{}).date === todayISO_(); }catch(e){ return false; }
+}
+function dismissReport(){
+  try{ localStorage.removeItem(REPORT_KEY); }catch(e){}
+  /* 記住今天已讀：萬一雲端刪除失敗、或輪詢又抓回同一份，這台也不會再跳出來 */
+  try{ localStorage.setItem(REPORT_READ_KEY, JSON.stringify({date:todayISO_()})); }catch(e){}
+  if(hasRemote){                                            // 一併從雲端清掉
+    fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({mode:"report", clear:true, user:userName})})
+      .then(function(){ toast("今日報告已關閉並刪除"); })
+      .catch(function(){ toast("報告已關閉（雲端清除失敗，明天會自動失效）"); });
+  }else{ toast("今日報告已關閉並刪除"); }
+  reportRemote = false;
+  renderReport();
+}
+
+/* 把報告文字排版成 HTML：略過 marker／暫存路徑，重點項目標色 */
+function renderReportText(txt){
+  const esc = t => String(t).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g,'<code style="background:#eef1f6;padding:0 4px;border-radius:4px;">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  /* 只標真正需要你動作的項目；「重複檢查全部通過」這類描述不算 */
+  const WARN = /要你處理|未判定|沒通過|未通過|沒有寫入|沒寫入|未寫入|失敗|錯誤|警告|重複預約|重複排|出現兩次|請到|請確認/;
+  const lines = String(txt||'').split(/\r?\n/);
+  let h='', inList=false;
+  for(const raw of lines){
+    // 去掉括號內的 marker 說明；整行在講 marker／暫存路徑就整行略過
+    let line = raw.replace(/[（(]\s*marker[^）)]*[）)]/gi,'');
+    if(/marker|\/tmp\/|暫存路徑/i.test(line)) continue;
+    const t = line.trim();
+    if(!t){ if(inList){ h+='</ul>'; inList=false; } continue; }
+    const m = t.match(/^[*•\-]\s+(.*)$/);
+    if(m){
+      const indent = (raw.match(/^(\s*)/)||['',''])[1].length;
+      if(!inList){ h+='<ul style="margin:4px 0 6px 18px;padding:0;">'; inList=true; }
+      const warn = WARN.test(m[1]);
+      h+=`<li style="margin:3px 0;${indent>=3?'margin-left:16px;font-size:12px;':''}${warn?'color:#c0392b;font-weight:bold;':''}">${inline(m[1])}</li>`;
+      continue;
+    }
+    if(inList){ h+='</ul>'; inList=false; }
+    if(/^(常春藤|長青樹)/.test(t))
+      h+=`<div style="font-weight:bold;color:var(--brand);margin:10px 0 3px;font-size:13px;border-left:3px solid var(--brand2);padding-left:7px;">${inline(t)}</div>`;
+    else if(/^總結/.test(t))
+      h+=`<div style="margin-top:10px;padding-top:7px;border-top:1px solid var(--line);color:var(--muted);">${inline(t)}</div>`;
+    else
+      h+=`<div style="margin:3px 0;${WARN.test(t)?'color:#c0392b;font-weight:bold;':''}">${inline(t)}</div>`;
+  }
+  if(inList) h+='</ul>';
+  return h || '<div style="color:var(--muted);">（報告內容是空的）</div>';
+}
+
+function renderReport(){
+  const box=document.getElementById('reportBox');
+  if(!box) return;
+  const body=document.getElementById('reportBody');
+  const meta=document.getElementById('reportMeta');
+  const readBtn=document.getElementById('reportReadBtn');
+  const r = reportReadToday() ? null : getReport();
+  if(!r){
+    body.innerHTML = '<div style="color:var(--muted);font-size:12.5px;">'
+      + (reportReadToday() ? '今日報告已閱讀並刪除。' : '今日尚無報告，每天流程跑完會自動帶入。')
+      + '</div>';
+    meta.textContent=''; readBtn.style.display='none';
+    return;
+  }
+  body.innerHTML=renderReportText(r.text);
+  const d=todayISO_().split('-');
+  meta.textContent=`${+d[1]}/${+d[2]}　來源：${r.from||'貼上'}`;
+  readBtn.style.display='';
+}
+
 /* ===== 護理師名單 =====
    {add:[自行新增的], del:[被刪掉的預設]} → 實際名單 = 預設 NURSES － del ＋ add
    預設與自訂都可刪，刪掉的可再新增回來。 */
@@ -2758,7 +2858,7 @@ function showNurseStats(){
   const [Y,M] = curYM.split("-").map(Number);
   const rows = nurseStatsFor(curOrg, curYM);
   const tot = rows.reduce((s,[,v])=>s+v.cases,0);
-  let h = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${ORG_NAME[curOrg]}｜${Y}年${M}月　（個案數＝該護理師負責分區的「人數」加總）　<span style="color:#c0392b;">⚠ 紅字＝已達 ${CASE_LIMIT} 案上限</span></div>`;
+  let h = `<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${ORG_NAME[curOrg]}｜${Y}年${M}月　　<span style="color:#c0392b;">⚠ 紅字＝已達 ${CASE_LIMIT} 案</span></div>`;
   h += `<table style="width:100%;border-collapse:collapse;font-size:13px;min-width:0;">
     <thead><tr>
       <th style="border:1px solid var(--line);padding:6px;background:var(--brand);color:#fff;">護理師</th>
@@ -2974,8 +3074,9 @@ document.getElementById('leaveModalBg').addEventListener('click', e=>{ if(e.targ
   if(spanMode) defaultSpan();
   applyModeUI(); syncYMToSpan();
   initUser();
-  await loadData();
-  mergeLocalNursesToRemote();   // 後端已支援時，把本機既有自訂名單搬上雲端
+  /* 連線失敗也要把表格畫出來，不要整頁空白（離線時仍可看本機備份） */
+  try{ await loadData(); }catch(e){ setStatus("⚠ 載入失敗：" + (e && e.message ? e.message : e)); }
+  try{ mergeLocalNursesToRemote(); }catch(e){}
   render();
   if(hasRemote){
     /* ★ 輪詢成本：Apps Script 消費者帳號每天只有 90 分鐘指令碼執行時間。
