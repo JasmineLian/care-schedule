@@ -1593,9 +1593,11 @@ async function parseExcel(file){
             if(dm[1]==="桃園市" || d==="桃園") d="桃園";
             idx=dm.index;
           }else{
-            // 桃園市轄下任何行政區（蘆竹、龜山、中壢…不在 DISTRICTS 清單內）一律歸「桃園」
-            const ti=at.indexOf("桃園市");
-            if(ti>=0){ d="桃園"; idx=ti; }
+            /* 找不到「○○區」時的備援：直接抓「○○市／○○縣」。
+               例「基隆市深澳坑路129之13號」沒有區名 → 歸「基隆」，
+               不會再因為地址 key 不完整而變成未判定。 */
+            const cm=at.match(/([一-鿿]{2,3})[市縣]/);
+            if(cm){ d=cm[1]; idx=cm.index; }
           }
           if(d!==null){
             const atext=at.slice(idx);
