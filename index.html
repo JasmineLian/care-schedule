@@ -408,14 +408,14 @@ function tagCount(tag){
   if(tag.qty!=null && tag.qty!=="") return +tag.qty;
   return tag.people ? tag.people.length : 0;
 }
-/* ★ 名單人數（不含機構 qty 的額外人數）：用來和 rec.count 比對 */
-function listPeople(tags){ return (tags||[]).reduce(function(s,t){ return s + (t.people ? t.people.length : 0); }, 0); }
+/* 名單實際人數：一般標籤算明細筆數，機構標籤算代表人數（與表格顯示一致） */
+function listPeople(tags){ return (tags||[]).reduce(function(s,t){ return s + tagCount(t); }, 0); }
 /* 有個案名單、但「人數」和名單筆數不同 → 回傳名單人數；一致或沒有名單則回傳 null */
 function countMismatch(rec){
   if(!rec || !rec.tags) return null;
   const n = listPeople(rec.tags);
   if(!n) return null;
-  return (rec.count||0) === n ? null : n;
+  return zoneCount(rec) === n ? null : n;
 }
 let editCountOrig = 0, editPeopleOrig = 0;
 function updateCountHint(){
@@ -429,12 +429,16 @@ function updateCountHint(){
     (auto !== n ? `　<span style="color:#c0392b;">⚠ 儲存後人數會是 ${auto}，與名單不同</span>
       <button class="btn" style="font-size:11px;padding:1px 7px;" onclick="document.getElementById('editCount').value=${n};editCountOrig=-1;updateCountHint();">改成 ${n}</button>` : "");
 }
-// 分區顯示人數：宣告總數 + 機構代表的額外人數（機構 qty 減其明細筆數）
+/* 機構標籤多出來的人數＝機構代表人數 − 該機構的明細筆數（一筆訪視代表多人） */
+function instExtraOf(tags){
+  let e = 0;
+  (tags||[]).forEach(t=>{ if(tagIsInst(t)) e += (tagCount(t) - (t.people?t.people.length:0)); });
+  return e;
+}
+/* 分區實際人數：宣告總數 + 機構多出來的人數。表格、CSV、統計、編輯視窗一律用這個數字 */
 function zoneCount(rec){
   if(!rec) return 0;
-  let extra = 0;
-  (rec.tags||[]).forEach(t=>{ if(tagIsInst(t)) extra += (tagCount(t) - (t.people?t.people.length:0)); });
-  return (rec.count||0) + extra;
+  return (rec.count||0) + instExtraOf(rec.tags);
 }
 const WEEK = ["日","一","二","三","四","五","六"];
 /* ★ 政府行政機關辦公日曆表：週一～五的放假日（週六日本來就標灰）。
@@ -2944,8 +2948,9 @@ function openModal(dateISO, zone){
   const rec = getRec(curOrg, dateISO, zone);
   tempTags = rec ? rec.tags.map(t=>({name:t.name, people:t.people||[], qty:t.qty, isInst:t.isInst})) : [];
   document.getElementById('modalTitle').textContent = `${dateISO}（週${WEEK[new Date(dateISO).getDay()]}）｜${zone}區`;
-  document.getElementById('editCount').value = rec ? rec.count : "";
-  editCountOrig = rec ? (rec.count||0) : 0;
+  /* ★ 顯示「表格上看到的人數」＝宣告數＋機構多出來的人數，避免和外面對不起來 */
+  document.getElementById('editCount').value = rec ? zoneCount(rec) : "";
+  editCountOrig = rec ? zoneCount(rec) : 0;
   editPeopleOrig = listPeople(tempTags);
   document.getElementById('customInput').value = "";
   renderPicker();
@@ -3000,9 +3005,12 @@ function addCustom(){
 function closeModal(){ document.getElementById('modalBg').classList.remove('show'); editing=null; }
 function saveCell(){
   if(!editing) return;
-  let cnt = parseInt(document.getElementById('editCount').value)||0;
+  let shown = parseInt(document.getElementById('editCount').value)||0;
   /* ★ 沒手動改人數欄時，人數跟著名單增減（以前移除標籤後人數原封不動 → 對不上） */
-  if(cnt === editCountOrig) cnt = Math.max(0, editCountOrig + (listPeople(tempTags) - editPeopleOrig));
+  if(shown === editCountOrig) shown = Math.max(0, editCountOrig + (listPeople(tempTags) - editPeopleOrig));
+  /* 輸入的是「表格上要顯示的人數」→ 扣掉機構多出來的，存回原始宣告數，
+     這樣 zoneCount() 再加回去才會等於你輸入的數字 */
+  const cnt = Math.max(0, shown - instExtraOf(tempTags));
   if(!data[editing.org][editing.dateISO]) data[editing.org][editing.dateISO]={};
   const rec0 = data[editing.org][editing.dateISO][editing.zone];
   data[editing.org][editing.dateISO][editing.zone] = {
