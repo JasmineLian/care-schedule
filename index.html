@@ -669,9 +669,9 @@ async function fetchIndex(){
     nurseData = normNurseData(j.nurses);
     nursesRemote = true;
   }
-  if(j.report && j.report.text && j.report.date===todayISO_() && !reportReadToday()){
+  if(j.report && j.report.text && j.report.date===todayISO_() && !reportAlreadyRead(j.report.at)){
     const had = !!getReport();
-    setReport(j.report.text, '每日流程');     // 後端有今天、且還沒讀過的報告
+    setReport(j.report.text, '每日流程', j.report.at);   // 後端有今天、且還沒讀過的報告
     reportRemote = true;
     /* 輪詢時 updatedAt 沒變會提早 return、不會跑到 render()，
        所以這裡直接刷新報告面板，新報告才會自己跳出來 */
@@ -2307,17 +2307,31 @@ function getReport(){
   }catch(e){}
   return null;
 }
-function setReport(text, from){
-  try{ localStorage.setItem(REPORT_KEY, JSON.stringify({date:todayISO_(), text:String(text||''), from:from||'貼上'})); }catch(e){}
+function setReport(text, from, at){
+  try{ localStorage.setItem(REPORT_KEY, JSON.stringify({date:todayISO_(), text:String(text||''), from:from||'貼上', at:at||0})); }catch(e){}
 }
 const REPORT_READ_KEY = 'careone-report-read';
-function reportReadToday(){
-  try{ return (JSON.parse(localStorage.getItem(REPORT_READ_KEY)||'null')||{}).date === todayISO_(); }catch(e){ return false; }
+/* 已讀記錄：{date, at}。at＝讀掉的那一份報告的時間戳。
+   之後若流程又送了「更新的一份」（at 更大），仍然會再跳出來，不會被誤判成已讀。 */
+function reportReadMark(){
+  try{
+    const m = JSON.parse(localStorage.getItem(REPORT_READ_KEY)||'null');
+    return (m && m.date === todayISO_()) ? m : null;
+  }catch(e){ return null; }
+}
+function reportReadToday(){ return !!reportReadMark(); }
+/* 這一份是否已經讀過：同一天、且不比讀過的那份新 */
+function reportAlreadyRead(at){
+  const m = reportReadMark();
+  if(!m) return false;
+  return !(Number(at||0) > Number(m.at||0));
 }
 function dismissReport(){
+  const cur = getReport();
   try{ localStorage.removeItem(REPORT_KEY); }catch(e){}
-  /* 記住今天已讀：萬一雲端刪除失敗、或輪詢又抓回同一份，這台也不會再跳出來 */
-  try{ localStorage.setItem(REPORT_READ_KEY, JSON.stringify({date:todayISO_()})); }catch(e){}
+  /* 記住「讀到哪一份」：雲端刪除失敗或輪詢抓回同一份都不會再跳；
+     但若之後流程送了更新的一份（at 更大），仍會正常跳出來 */
+  try{ localStorage.setItem(REPORT_READ_KEY, JSON.stringify({date:todayISO_(), at:(cur&&cur.at)||Date.now()})); }catch(e){}
   if(hasRemote){                                            // 一併從雲端清掉
     fetchJSONRetry(SYNC_URL, {method:'POST', body: JSON.stringify({mode:"report", clear:true, user:userName})})
       .then(function(){ toast("今日報告已關閉並刪除"); })
@@ -2369,7 +2383,9 @@ function renderReport(){
   const body=document.getElementById('reportBody');
   const meta=document.getElementById('reportMeta');
   const readBtn=document.getElementById('reportReadBtn');
-  const r = reportReadToday() ? null : getReport();
+  /* 用時間戳判斷，不是只看日期：比讀過的那份更新的報告仍要顯示 */
+  const stored = getReport();
+  const r = (stored && !reportAlreadyRead(stored.at)) ? stored : null;
   if(!r){
     body.innerHTML = '<div style="color:var(--muted);font-size:12.5px;">'
       + (reportReadToday() ? '今日報告已閱讀並刪除。' : '今日尚無報告，每天流程跑完會自動帶入。')
