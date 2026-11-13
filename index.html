@@ -371,6 +371,13 @@ const DISTRICTS = ["中正","大同","中山","松山","大安","萬華","信義
 "五股","泰山","林口","深坑","石碇","坪林","三芝","石門","八里","平溪","雙溪","貢寮","金山","萬里","烏來",
 "安樂","暖暖","七堵","仁愛","桃園"];
 const KEELUNG = new Set(["安樂","暖暖","七堵","仁愛"]);
+/* 台灣 22 個縣市：地址找不到「○○區」時，只認這些縣市名當備援。
+   （舊版抓「任意兩三個字＋市」，會把「住台北市」判成「住台北」、「全聯超市」判成「全聯超」） */
+const CITY_RE = /(臺北|台北|新北|桃園|臺中|台中|臺南|台南|高雄|基隆|新竹|嘉義|苗栗|彰化|南投|雲林|屏東|宜蘭|花蓮|臺東|台東|澎湖|金門|連江)[市縣]/;
+/* 台北時間：一律以 UTC+8 換算（台灣沒有日光節約時間），不受使用者電腦時區影響。
+   toISOString() 是 UTC，台北早上 8 點前會算成「昨天」，所以不能直接用。 */
+function tpeISO(ms){ return new Date((ms==null?Date.now():ms) + 8*3600000).toISOString(); }
+function todayTPE(){ return tpeISO().slice(0,10); }
 const INSTITUTIONS = [["瑞芳礦工","瑞礦"],["元康","元康"],["銀泰","銀泰"],["童音","童音"],["童心","童心"],
 ["康庭","康庭"],["福安","福安"],["德欣","德欣"],["吉康","吉康"],["盛禾","盛禾"],["愛心","愛心"],["長勤","長勤"]];
 // 機構名稱關鍵字（含別名）：地址括號內只要出現其一即判為機構單位，標籤名用對應機構名
@@ -405,7 +412,7 @@ function parseInstQty(s){
 // 標籤有效人數：機構標籤若有 qty（自動解析或手動設定）則以 qty 為準，否則用個案明細筆數
 function tagCount(tag){
   if(!tag) return 0;
-  if(tag.qty!=null && tag.qty!=="") return +tag.qty;
+  if(tag.qty!=null && tag.qty!==""){ const q=Number(tag.qty); return isFinite(q)?q:0; }
   return tag.people ? tag.people.length : 0;
 }
 /* 名單實際人數：一般標籤算明細筆數，機構標籤算代表人數（與表格顯示一致） */
@@ -438,7 +445,8 @@ function instExtraOf(tags){
 /* 分區實際人數：宣告總數 + 機構多出來的人數。表格、CSV、統計、編輯視窗一律用這個數字 */
 function zoneCount(rec){
   if(!rec) return 0;
-  return (rec.count||0) + instExtraOf(rec.tags);
+  /* count 來自雲端，先強制轉數字：避免被寫成字串時跟數字「相加」變成字串串接、插進畫面 */
+  return (Number(rec.count)||0) + instExtraOf(rec.tags);
 }
 const WEEK = ["日","一","二","三","四","五","六"];
 /* ★ 政府行政機關辦公日曆表：週一～五的放假日（週六日本來就標灰）。
@@ -1213,15 +1221,23 @@ async function openHistory(){
     body.innerHTML = j.items.map(function(it){
       const act = {edit:"修改", delete:"刪除", restore:"還原", full:"整包上傳"}[it.action] || it.action;
       return `<div style="border-bottom:1px solid var(--line);padding:6px 2px;font-size:12.5px;">
-        <b>${fmtDT(it.ts)}</b>　${escapeHtml(it.user||"?")}　<span style="color:var(--muted)">${act}</span>
+        <b>${fmtDT(it.ts)}</b>　${escapeHtml(it.user||"?")}　<span style="color:var(--muted)">${esc(act)}</span>
         <div style="margin:3px 0 4px;">${(it.summary||[]).map(escapeHtml).join("<br>") || "（無內容變化）"}</div>
-        <button class="btn" style="font-size:11.5px;padding:2px 9px;" onclick="restoreHist(${it.id})">↩ 還原到這次之前</button>
+        <button class="btn" style="font-size:11.5px;padding:2px 9px;" onclick="restoreHist(${Number(it.id)||0})">↩ 還原到這次之前</button>
       </div>`;
     }).join("");
   }catch(e){ body.innerHTML = "讀取失敗：" + escapeHtml(e.message); }
 }
 function closeHistory(){ document.getElementById('histModalBg').classList.remove('show'); }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+/* ═══ 安全輸出（防 XSS）═══
+   個案姓名／地址／管路／備註、標籤名、護理師名、請假事由、檔名……都是外部資料
+   （來自 Excel 或雲端，任何人都可能寫入），插進 HTML 前一律經過 esc()。 */
+function esc(s){ return escapeHtml(s); }
+/* 行內事件的字串參數：先轉成 JS 字串常值、再做 HTML 跳脫。
+   例 onclick="toggleZone(${jsa(z)})"：不論 z 含單引號、雙引號或 <script>，
+   瀏覽器解出來都只是 toggleZone("…") 的一個字串，不會變成程式碼。 */
+function jsa(s){ return escapeHtml(JSON.stringify(String(s==null?'':s))); }
 async function restoreHist(id){
   if(!confirm("確定把這一天還原到這次修改之前的樣子？\n（只影響這一天；已指定的護理師會保留；之後仍可再還原回來）")) return;
   try{
@@ -1358,7 +1374,7 @@ function offerBackupRecovery(){
   if(confirm(`偵測到一份舊格式的本機備份（${fmtDT(b.savedAt)}，${countDays(b.data)} 天）。\n為了避免整份舊資料蓋掉別人的修改，系統不再自動還原。\n\n【確定】下載這份備份檔（之後可人工比對）\n【取消】忽略`)){
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(b)],{type:'application/json'}));
-    a.download = `care-schedule-本機備份_${new Date(b.savedAt||Date.now()).toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+    a.download = `care-schedule-本機備份_${tpeISO(b.savedAt||Date.now()).slice(0,19).replace(/[:T]/g,'-')}.json`;
     a.click();
   }
   markBackupSynced();
@@ -1368,7 +1384,7 @@ function exportBackup(){
                    days:{ivy:Object.keys(data.ivy||{}).length, tree:Object.keys(data.tree||{}).length}};
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)],{type:'application/json'}));
-  a.download = `care-schedule-備份_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+  a.download = `care-schedule-備份_${tpeISO().slice(0,19).replace(/[:T]/g,'-')}.json`;
   a.click();
   toast(`已下載備份（常春藤 ${payload.days.ivy} 天、長青樹 ${payload.days.tree} 天）`);
 }
@@ -1600,8 +1616,8 @@ async function parseExcel(file){
             /* 找不到「○○區」時的備援：直接抓「○○市／○○縣」。
                例「基隆市深澳坑路129之13號」沒有區名 → 歸「基隆」，
                不會再因為地址 key 不完整而變成未判定。 */
-            const cm=at.match(/([一-鿿]{2,3})[市縣]/);
-            if(cm){ d=cm[1]; idx=cm.index; }
+            const cm=at.match(CITY_RE);
+            if(cm){ d=cm[1].replace(/^臺/,'台'); idx=cm.index; }   // 臺北→台北，統一標籤名
           }
           if(d!==null){
             const atext=at.slice(idx);
@@ -1676,10 +1692,10 @@ async function applyParsed(results, preMsgs){
     const src   = (r && r.src) || "JSON";
     try{
       if(!r || !r.org || !r.dateISO || !r.zones || Object.keys(r.zones).length===0){
-        msgs.push(`⚠ ${fname}【來源：${src}】：無法辨識（機構=${r&&r.org?ORG_NAME[r.org]:'?'}，日期=${(r&&r.dateISO)||'?'}）`);
+        msgs.push(`⚠ ${esc(fname)}【來源：${esc(src)}】：無法辨識（機構=${r&&r.org?esc(ORG_NAME[r.org]||r.org):'?'}，日期=${esc((r&&r.dateISO)||'?')}）`);
         continue;
       }
-      if(!data[r.org]){ msgs.push(`⚠ ${fname}【來源：${src}】：未知機構代碼 ${r.org}`); continue; }
+      if(!data[r.org]){ msgs.push(`⚠ ${esc(fname)}【來源：${esc(src)}】：未知機構代碼 ${esc(r.org)}`); continue; }
       // 重新上傳同一天：整日覆蓋為最新內容（僅保留各分區已手動指定的護理師）
       const oldDay = data[r.org][r.dateISO] || {};
       const oldNurses = {};
@@ -1696,14 +1712,14 @@ async function applyParsed(results, preMsgs){
           return tg;
         }), nurse: oldNurses[z]||""};
         const parsed = Object.values(info.people||{}).reduce((s,a)=>s+a.length,0);
-        if(parsed !== info.count) mismatch.push(`${z}區(宣告${info.count}/解析${parsed})`);
-        const dd = (info.districts||[]).map(d=>`${d}${info.people&&info.people[d]?info.people[d].length:""}`).join("、");
-        parts.push(`${z}區${info.count}人（${dd||"—"}）`);
+        if(parsed !== info.count) mismatch.push(`${esc(z)}區(宣告${esc(info.count)}/解析${parsed})`);
+        const dd = (info.districts||[]).map(d=>`${esc(d)}${info.people&&info.people[d]?info.people[d].length:""}`).join("、");
+        parts.push(`${esc(z)}區${esc(info.count)}人（${dd||"—"}）`);
       }
-      let line = `✅ ${fname}【來源：${src}】→ ${ORG_NAME[r.org]} ${r.dateISO}：${parts.join("；")}`;
+      let line = `✅ ${esc(fname)}【來源：${esc(src)}】→ ${ORG_NAME[r.org]} ${esc(r.dateISO)}：${parts.join("；")}`;
       if(r.mainHdrs!=null) line += `｜表頭定位：主表 ${r.mainHdrs} 段${r.subHdrs?`、新案表 ${r.subHdrs} 段`:""}`;
       if(hadDay) line += `<br>　🔄 已覆蓋此日期原有暫存資料（保留原護理師指定）`;
-      if(r.unknowns && r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.join("、")}（已標紅框，可拖曳或編輯歸類）`;
+      if(r.unknowns && r.unknowns.length) line += `<br>　⚠ 未判定行政區：${r.unknowns.map(esc).join("、")}（已標紅框，可拖曳或編輯歸類）`;
       if(mismatch.length) line += `<br>　⚠ 人數核對不符：${mismatch.join("、")}，請人工確認`;
       msgs.push(line);
       ok++;
@@ -1712,7 +1728,7 @@ async function applyParsed(results, preMsgs){
       curYM = r.dateISO.slice(0,7);
       ensureDateVisible(r.dateISO);   // 跨月模式：自動延伸區間到剛上傳的日期
     }catch(e){
-      msgs.push(`❌ ${fname}【來源：${src}】：套用錯誤 ${e.message}`);
+      msgs.push(`❌ ${esc(fname)}【來源：${esc(src)}】：套用錯誤 ${esc(e.message)}`);
     }
   }
   report.innerHTML = msgs.join("<br>");
@@ -1732,9 +1748,9 @@ async function handleFiles(files){
     const ext=(f.name.toLowerCase().match(/\.([a-z0-9]+)$/)||[])[1]||"";
     try{
       if(ext==="xlsx"||ext==="xls"){ results.push(await parseExcel(f)); }
-      else { msgs.push(`⚠ ${f.name}：非 Excel(.xlsx)，略過${ext==="pdf"?"（本版僅支援 Excel，請改用 CareOne 匯出的 xlsx）":""}`); }
+      else { msgs.push(`⚠ ${esc(f.name)}：非 Excel(.xlsx)，略過${ext==="pdf"?"（本版僅支援 Excel，請改用 CareOne 匯出的 xlsx）":""}`); }
     }catch(e){
-      msgs.push(`❌ ${f.name}【來源：Excel】：解析錯誤 ${e.message}`);
+      msgs.push(`❌ ${esc(f.name)}【來源：Excel】：解析錯誤 ${esc(e.message)}`);
     }
   }
   return applyParsed(results, msgs);
@@ -1906,16 +1922,16 @@ function render(){
   const zones = allZones.filter(z=>!hid.has(z));
   document.getElementById('zoneBar').innerHTML = '<b>顯示區域：</b>' +
     allZones.map(z=>`<span class="zchip${hid.has(z)?'':' on'}" draggable="true"
-      ondragstart="zoneDragStart(event,'${z}')" ondragend="zoneDragEnd()"
-      ondragover="zoneDragOver(event)" ondragleave="zoneDragLeave(event)" ondrop="zoneDrop(event,'${z}')"
-      onclick="toggleZone('${z}')" title="點擊顯示/隱藏，拖曳可換位">${z}區</span>`).join('') +
+      ondragstart="zoneDragStart(event,${jsa(z)})" ondragend="zoneDragEnd()"
+      ondragover="zoneDragOver(event)" ondragleave="zoneDragLeave(event)" ondrop="zoneDrop(event,${jsa(z)})"
+      onclick="toggleZone(${jsa(z)})" title="點擊顯示/隱藏，拖曳可換位">${esc(z)}區</span>`).join('') +
     `<span class="zchip all" onclick="showAllZones()">全部顯示</span>`;
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = todayTPE();
   const loadCache = {};                            // 各月案量，每月只算一次
   const loadOf = ym => loadCache[ym] || (loadCache[ym] = nurseLoadMap(curOrg, ym));
 
   let html = "<thead><tr><th>" + (crossMonth ? "月/日" : "日") + "</th><th>週</th>";
-  for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${z}區 行政區</th>`;
+  for(const z of zones) html += `<th>人數</th><th class="nursehd">護理師</th><th class="zone">${esc(z)}區 行政區</th>`;
   html += "</tr></thead><tbody>";
 
   const colSpanAll = 2 + zones.length*3;
@@ -1936,7 +1952,7 @@ function render(){
     const offToday = leaveOf(curOrg, dateISO);
     const offNames = offToday ? Object.keys(offToday) : [];
     const offMark = offNames.length
-      ? `<div style="font-size:9.5px;color:#e67e22;font-weight:normal;line-height:1.2;margin-top:1px;" title="${offNames.map(x=>x+(offToday[x]?"・"+offToday[x]:"")).join("、")}">🏖${offNames.length}</div>`
+      ? `<div style="font-size:9.5px;color:#e67e22;font-weight:normal;line-height:1.2;margin-top:1px;" title="${esc(offNames.map(x=>x+(offToday[x]?"・"+offToday[x]:"")).join("、"))}">🏖${offNames.length}</div>`
       : "";
     html += `<tr class="${wknd}${today}"><td class="day">${dayLabel}${offMark}</td><td class="wd"${hName?` title="國定假日：${hName}"`:""}>${wd}${hName?`<div class="hname">${hName}</div>`:""}${WORKDAYS[dateISO]?`<div class="hname">補班</div>`:""}</td>`;
     const rec = data[curOrg][dateISO] || {};
@@ -1951,17 +1967,17 @@ function render(){
         const badge = ppl ? `<span class="cbadge">${ppl}</span>` : "";
         const unk = tag.name==="未判定" ? " unknown" : "";
         chips += `<span class="chip${unk}" draggable="true" title="${inst?'機構標籤：釘選後可編輯代表人數':''}" style="${c?`background:${c};`:""}"
-          ondragstart="dragStart(event,'${dateISO}','${z}',${i})" ondragend="dragEnd(event)"
-          ondragover="chipDragOver(event)" ondragleave="chipDragLeave(event)" ondrop="chipDrop(event,'${dateISO}','${z}',${i})"
-          onmouseenter="chipEnter(event,'${dateISO}','${z}',${i})" onmouseleave="chipLeave()"
-          onclick="chipPin(event,'${dateISO}','${z}',${i})"
-          >${tag.name}${badge}<span class="x" onclick="quickRemove(event,'${dateISO}','${z}',${i})">✕</span></span>`;
+          ondragstart="dragStart(event,${jsa(dateISO)},${jsa(z)},${i})" ondragend="dragEnd(event)"
+          ondragover="chipDragOver(event)" ondragleave="chipDragLeave(event)" ondrop="chipDrop(event,${jsa(dateISO)},${jsa(z)},${i})"
+          onmouseenter="chipEnter(event,${jsa(dateISO)},${jsa(z)},${i})" onmouseleave="chipLeave()"
+          onclick="chipPin(event,${jsa(dateISO)},${jsa(z)},${i})"
+          >${esc(tag.name)}${badge}<span class="x" onclick="quickRemove(event,${jsa(dateISO)},${jsa(z)},${i})">✕</span></span>`;
       });
-      chips += `<span class="addbtn" title="新增行政區" onclick="openModal('${dateISO}','${z}')">＋</span>`;
+      chips += `<span class="addbtn" title="新增行政區" onclick="openModal(${jsa(dateISO)},${jsa(z)})">＋</span>`;
       const mis = info ? countMismatch(info) : null;
       html += mis===null
-        ? `<td class="cnt" onclick="openModal('${dateISO}','${z}')">${cnt}</td>`
-        : `<td class="cnt" style="color:#c0392b;background:#fff0f0;" title="人數 ${info.count||0} 與個案名單 ${mis} 人不符，點擊開啟後可一鍵修正" onclick="openModal('${dateISO}','${z}')">${cnt}<br><span style="font-size:10px;">名單${mis}</span></td>`;
+        ? `<td class="cnt" onclick="openModal(${jsa(dateISO)},${jsa(z)})">${cnt}</td>`
+        : `<td class="cnt" style="color:#c0392b;background:#fff0f0;" title="人數 ${Number(info.count)||0} 與個案名單 ${mis} 人不符，點擊開啟後可一鍵修正" onclick="openModal(${jsa(dateISO)},${jsa(z)})">${cnt}<br><span style="font-size:10px;">名單${mis}</span></td>`;
       const nurse = info && info.nurse ? info.nurse : "";
       /* 已排班的人那天登記了請假 → 標紅提醒（不自動清掉，由人決定怎麼調） */
       const conflict = nurse && isOnLeave(curOrg, dateISO, nurse);
@@ -1969,13 +1985,13 @@ function render(){
       const nLoad = nurse ? (loadOf(ymRow)[nurse]||0) : 0;
       const over  = !!nurse && !conflict && nLoad>=CASE_LIMIT;
       const nurseHtml = conflict
-        ? `<span style="color:#c0392b;font-weight:bold;" title="這天已登記請假">${nurse}<br><span style="font-size:10px;">⚠請假</span></span>`
+        ? `<span style="color:#c0392b;font-weight:bold;" title="這天已登記請假">${esc(nurse)}<br><span style="font-size:10px;">⚠請假</span></span>`
         : over
-        ? `<span style="color:#c0392b;font-weight:bold;" title="本月已累積 ${nLoad} 案（上限 ${CASE_LIMIT}）">${nurse}<br><span style="font-size:10px;">⚠${nLoad}案</span></span>`
-        : nurse;
+        ? `<span style="color:#c0392b;font-weight:bold;" title="本月已累積 ${nLoad} 案（上限 ${CASE_LIMIT}）">${esc(nurse)}<br><span style="font-size:10px;">⚠${nLoad}案</span></span>`
+        : esc(nurse);
       const lockMark = nurse ? `<span style="font-size:10px;opacity:.55;margin-right:1px;">🔒</span>` : "";
-      html += `<td class="nurse${over?' overload':''}" onclick="editNurse('${dateISO}','${z}',event)" title="${nurse?'🔒 已鎖定：點擊可解鎖更改（會先確認）':'點擊選擇護理師'}">${lockMark}${nurseHtml}</td>`;
-      html += `<td class="dists" data-date="${dateISO}" data-zone="${z}"
+      html += `<td class="nurse${over?' overload':''}" onclick="editNurse(${jsa(dateISO)},${jsa(z)},event)" title="${nurse?'🔒 已鎖定：點擊可解鎖更改（會先確認）':'點擊選擇護理師'}">${lockMark}${nurseHtml}</td>`;
+      html += `<td class="dists" data-date="${esc(dateISO)}" data-zone="${esc(z)}"
         ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropChip(event)">${chips}</td>`;
     }
     html += "</tr>";
@@ -2147,18 +2163,18 @@ function buildTipContent(dateISO, zone, idx){
   if(tagIsInst(tag)){
     h += `<div style="background:#fff7e6;border:1px solid #ffe0a3;border-radius:8px;padding:7px 9px;margin-bottom:7px;font-size:12px;">
       🏥 機構代表人數：<b style="font-size:14px;color:#e67e22;">${tagCount(tag)}</b>
-      <button class="btn" style="padding:2px 9px;font-size:11px;margin-left:8px;" onclick="editInstQty('${dateISO}','${zone}',${idx})">✏️ 編輯數量</button>
+      <button class="btn" style="padding:2px 9px;font-size:11px;margin-left:8px;" onclick="editInstQty(${jsa(dateISO)},${jsa(zone)},${idx})">✏️ 編輯數量</button>
     </div>`;
   }
   if(ppl.length===0){
     h += `<div class="none">${tagIsInst(tag)?"此機構標籤尚無個案明細，人數以上方設定為準":"此標籤為手動新增，尚無個案明細"}</div>`;
   }else{
     ppl.forEach((p,i)=>{
-      h += `<div class="person" draggable="true" ondragstart="personDragStart(event,'${dateISO}','${zone}',${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${p.name}<button class="pdel" title="從這一區刪除這位個案（人數同步減 1）" onclick="event.stopPropagation();deletePerson('${dateISO}','${zone}',${idx},${i})">🗑</button></div>`;
-      if(p.last) h += `<div class="plast">🗓 上次訪視 ${p.last}</div>`;
-      if(p.addr) h += `<div class="paddr">🏠 ${p.addr}</div>`;
-      if(p.tube) h += `<div class="ptube">🩺 ${p.tube}</div>`;
-      if(p.note) h += `<div class="pnote">📝 ${p.note}</div>`;
+      h += `<div class="person" draggable="true" ondragstart="personDragStart(event,${jsa(dateISO)},${jsa(zone)},${idx},${i})" ondragend="personDragEnd(event)"><div class="pname"><input type="checkbox" class="psel" title="勾選後可拆分成小標籤" onclick="event.stopPropagation()" onchange="tipToggleSel(${i},this.checked)"><span class="phandle">⠿</span>${i+1}. ${esc(p.name)}<button class="pdel" title="從這一區刪除這位個案（人數同步減 1）" onclick="event.stopPropagation();deletePerson(${jsa(dateISO)},${jsa(zone)},${idx},${i})">🗑</button></div>`;
+      if(p.last) h += `<div class="plast">🗓 上次訪視 ${esc(p.last)}</div>`;
+      if(p.addr) h += `<div class="paddr">🏠 ${esc(p.addr)}</div>`;
+      if(p.tube) h += `<div class="ptube">🩺 ${esc(p.tube)}</div>`;
+      if(p.note) h += `<div class="pnote">📝 ${esc(p.note)}</div>`;
       h += `</div>`;
     });
   }
@@ -2300,8 +2316,7 @@ function quickRemove(ev, dateISO, zone, idx){
 const REPORT_KEY = 'careone-report';
 let reportRemote = false;
 
-function todayISO_(){ const d=new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function todayISO_(){ return todayTPE(); }   // 與後端相同用台北時區，報告日期才對得上
 
 function getReport(){
   try{
@@ -2518,7 +2533,7 @@ function closeNurseMgr(){ document.getElementById('nurseMgrBg').classList.remove
 function renderNurseMgr(){
   const list=nurseList(curOrg), box=document.getElementById('nurseMgrList');
   if(!list.length){ box.innerHTML='<div class="empty">名單是空的，請先新增</div>'; return; }
-  box.innerHTML = list.map(n=>`<span class="chip" draggable="false" style="background:${isDefaultNurse(curOrg,n)?'#C8E6C9':'#FFF59D'};cursor:default;">${n}<span class="x" onclick="removeNurseFromMgr('${n}')">✕</span></span>`).join("")
+  box.innerHTML = list.map(n=>`<span class="chip" draggable="false" style="background:${isDefaultNurse(curOrg,n)?'#C8E6C9':'#FFF59D'};cursor:default;">${esc(n)}<span class="x" onclick="removeNurseFromMgr(${jsa(n)})">✕</span></span>`).join("")
     + `<div style="font-size:11px;color:var(--muted);margin-top:6px;">🟩 預設　🟨 自行新增</div>`;
 }
 function addNurseFromMgr(){
@@ -2566,9 +2581,9 @@ function editNurse(dateISO, zone, ev){
       const label = `${n}　${c}${over?" ⚠":""}` + (off ? `（請假${note?"・"+note:""}）` : "");
       /* ★ 請假的人：灰字 + disabled，選不到。要排他就先去「🏖 請假」把登記取消 */
       const style = off ? ' disabled style="color:#b0b5bd;"' : (over ? ' style="color:#c0392b;font-weight:bold;"' : '');
-      return `<option value="${n}"${n===cur?" selected":""}${style}>${label}</option>`;
+      return `<option value="${esc(n)}"${n===cur?" selected":""}${style}>${esc(label)}</option>`;
     }).join("");
-  if(cur && !list.includes(cur)) opts += `<option value="${cur}" selected>${cur}</option>`;  // 保留舊自訂值
+  if(cur && !list.includes(cur)) opts += `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;  // 保留舊自訂值
   opts += `<option value="__add__">➕ 新增護理師…</option><option value="__manage__">👥 管理名單（新增／刪除）…</option>`;
   td.innerHTML = `<select style="font-family:inherit;font-size:12.5px;padding:2px 3px;border:1px solid var(--brand2);border-radius:6px;max-width:112px;background:#fff;color:#4a6da7;">${opts}</select>`;
   const sel = td.querySelector('select');
@@ -2626,7 +2641,7 @@ function openLeave(){
   leaveViewYM = curYM;          // 預設看目前表格所在的月份
   leaveViewAll = false;
   document.getElementById('leaveTitle').textContent = `🏖 ${ORG_NAME[curOrg]} 請假登記`;
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayTPE();
   document.getElementById('leaveFrom').value = today;
   document.getElementById('leaveTo').value = today;
   document.getElementById('leaveNote').value = "";
@@ -2641,7 +2656,7 @@ function renderLeavePicker(){
   if(leavePickName && !list.includes(leavePickName)) leavePickName = "";   // 已從名單移除 → 取消選取
   document.getElementById('leaveNursePicker').innerHTML = list.map(function(nm){
     const on = (nm===leavePickName) ? " on" : "";
-    return `<span class="pick${on}" style="background:#dfe6f5" onclick="pickLeaveNurse('${nm}')">${nm}</span>`;
+    return `<span class="pick${on}" style="background:#dfe6f5" onclick="pickLeaveNurse(${jsa(nm)})">${esc(nm)}</span>`;
   }).join("") || `<div style="color:var(--muted);font-size:12.5px;padding:6px;">這個機構還沒有護理師名單</div>`;
 }
 function pickLeaveNurse(nm){
@@ -2828,12 +2843,12 @@ function renderLeaveList(){
       const dd = new Date(x.date + "T00:00:00");
       const wk = isNaN(dd) ? "" : WK[dd.getDay()];
       const label = leaveViewAll ? x.date.slice(5) : (+x.date.slice(8)) + "日";
-      return `<span class="chip" style="background:#ffe0b2;" title="${x.date}（週${wk}）${x.note?"・"+x.note:""}">` +
-             `${label}${wk?"("+wk+")":""}${x.note?"・"+x.note:""}` +
-             `<span class="x" onclick="removeLeave('${x.date}','${nm}')">✕</span></span>`;
+      return `<span class="chip" style="background:#ffe0b2;" title="${esc(x.date)}（週${wk}）${x.note?"・"+esc(x.note):""}">` +
+             `${esc(label)}${wk?"("+wk+")":""}${x.note?"・"+esc(x.note):""}` +
+             `<span class="x" onclick="removeLeave(${jsa(x.date)},${jsa(nm)})">✕</span></span>`;
     }).join("");
     return `<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px dashed #edf0f5;">` +
-           `<b style="font-size:12.5px;">${nm}</b>` +
+           `<b style="font-size:12.5px;">${esc(nm)}</b>` +
            `<span style="font-size:11px;color:var(--muted);margin-left:6px;">${byName[nm].length} 天</span>` +
            `<div style="margin-top:2px;">${items}</div></div>`;
   }).join("");
@@ -2889,7 +2904,7 @@ function showNurseStats(){
     </tr></thead><tbody>`;
   rows.forEach(([n,s])=>{
     h += `<tr>
-      <td style="border:1px solid var(--line);padding:6px;font-weight:bold;">${n}</td>
+      <td style="border:1px solid var(--line);padding:6px;font-weight:bold;">${esc(n)}</td>
       <td style="border:1px solid var(--line);padding:6px;text-align:center;font-weight:bold;color:${s.cases>=CASE_LIMIT?'#c0392b':'var(--brand)'};">${s.cases}${s.cases>=CASE_LIMIT?' ⚠':''}</td>
       <td style="border:1px solid var(--line);padding:6px;text-align:center;">${s.days.size}</td>
     </tr>`;
@@ -2966,14 +2981,14 @@ function renderPicker(){
       const c = tagIsInst(t) ? INST_COLOR : colorOf(curOrg, t.name);
       const n = tagCount(t);
       const badge = n ? `<span class="cbadge">${n}</span>` : "";
-      return `<span class="chip" style="${c?`background:${c};`:""}">${t.name}${badge}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
+      return `<span class="chip" style="${c?`background:${c};`:""}">${esc(t.name)}${badge}<span class="x" onclick="tempRemove(${i})">✕</span></span>`;
     }).join("");
   }
   const pg = document.getElementById('pickerGroups');
   pg.innerHTML = GROUPS[curOrg].map((g,gi)=>{
     const btns = g.names.map(name=>{
       const on = tempTags.some(t=>t.name===name) ? " on" : "";
-      return `<span class="pick${on}" style="background:${g.color}" onclick="togglePick('${name}')">${name}</span>`;
+      return `<span class="pick${on}" style="background:${g.color}" onclick="togglePick(${jsa(name)})">${esc(name)}</span>`;
     }).join("");
     return `<div class="pick-group"><div class="gtitle">第 ${gi+1} 組</div>${btns}</div>`;
   }).join("");
